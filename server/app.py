@@ -1,55 +1,60 @@
-# app.py
-from datetime import datetime, timedelta
+# server/app.py
 import os, secrets, hashlib
+from datetime import timedelta, datetime
 from pathlib import Path
+
 from flask import Flask, request, send_from_directory
+from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import func
+from werkzeug.security import generate_password_hash, check_password_hash
+
 from flask_jwt_extended import (
     JWTManager, create_access_token, create_refresh_token,
     jwt_required, get_jwt_identity
 )
-from werkzeug.security import generate_password_hash, check_password_hash
-from flask_socketio import SocketIO, join_room, leave_room, emit, disconnect
-from flask_cors import CORS
-import jwt as pyjwt
-from sqlalchemy import func
+from flask_jwt_extended.utils import decode_token  # robust decode for sockets
 
-print(">>> Starting backend in THREADING mode (no websocket upgrades).")
+from flask_socketio import SocketIO, join_room, leave_room, emit
+
+print(">>> Starting backend in THREADING mode (WS upgrades optional via ALLOW_WS).")
+
+# ------------ Config ------------
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+CLIENT_DIR = os.getenv("CLIENT_DIR", str(ROOT / "client"))
+DB_PATH = os.getenv("DATABASE_URL", f"sqlite:///{ROOT/'instance'/'app.db'}")
 
 class Config:
-    SECRET_KEY = os.getenv("FLASK_SECRET", "dev-secret")
-    JWT_SECRET_KEY = os.getenv("JWT_SECRET", "change-me")
+    SECRET_KEY = os.getenv("FLASK_SECRET", secrets.token_hex(16))
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET", secrets.token_hex(32))
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=int(os.getenv("JWT_HOURS", "12")))
-    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///app.db")
+    SQLALCHEMY_DATABASE_URI = DB_PATH
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {"connect_args": {"check_same_thread": False}}
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
-    CLIENT_DIR = os.getenv("CLIENT_DIR", str(Path.cwd() / "client"))
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=CLIENT_DIR, static_url_path="")
 app.config.from_object(Config)
 CORS(app, origins=Config.CORS_ORIGINS, supports_credentials=True)
-
-app.static_folder = app.config["CLIENT_DIR"]
-app.static_url_path = ""
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
+allow_ws = os.getenv("ALLOW_WS", "0") == "1"  # enable WebSocket upgrades in prod
 sio = SocketIO(
     app,
-    cors_allowed_origins=Config.CORS_ORIGINS,
     async_mode="threading",
+    cors_allowed_origins=Config.CORS_ORIGINS,
     logger=False,
     engineio_logger=False,
-    allow_upgrades=False,          # force long-polling (works with Werkzeug)
-    ping_timeout=30,
+    allow_upgrades=allow_ws,
     ping_interval=12,
+    ping_timeout=30,
 )
 
-# ----------------- Models -----------------
+# ------------ Models ------------
 class User(db.Model):
-    __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, index=True, nullable=False)
     email = db.Column(db.String(120), unique=True, index=True)
@@ -58,52 +63,49 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 class Message(db.Model):
-    __tablename__ = "messages"
     id = db.Column(db.Integer, primary_key=True)
     room = db.Column(db.String(64), index=True, nullable=False)
-    sender_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     sender_name = db.Column(db.String(64), nullable=False)
     text = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
-class CallLog(db.Model):
-    __tablename__ = "call_logs"
+class PairRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    room = db.Column(db.String(64), index=True, nullable=False)
-    caller_id = db.Column(db.Integer, index=True)
-    callee_id = db.Column(db.Integer, index=True)
-    started_at = db.Column(db.DateTime, default=datetime.utcnow)
-    ended_at = db.Column(db.DateTime)
-    voice_variant = db.Column(db.String(16))
+    from_id = db.Column(db.Integer, index=True, nullable=False)
+    to_id = db.Column(db.Integer, index=True, nullable=False)
+    status = db.Column(db.String(16), default="pending")  # pending|accepted|declined
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 with app.app_context():
+    (ROOT / "instance").mkdir(parents=True, exist_ok=True)
     db.create_all()
 
-# ----------------- Helpers -----------------
+# ------------ Helpers ------------
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 def gen_code():
     while True:
-        code = "".join(secrets.choice(_ALPHABET) for _ in range(6))
-        if not User.query.filter_by(code=code).first():
-            return code
+        c = "".join(secrets.choice(_ALPHABET) for _ in range(6))
+        if not User.query.filter_by(code=c).first():
+            return c
 
-def room_for(uid_a: int, uid_b: int) -> str:
-    a, b = sorted([uid_a, uid_b])
-    h = hashlib.sha256(f"pair:{a}:{b}".encode()).hexdigest()[:32]
-    return f"pair-{h}"
+def room_for(a: int, b: int) -> str:
+    x, y = sorted([a, b])
+    return "pair-" + hashlib.sha256(f"{x}:{y}".encode()).hexdigest()[:32]
 
-def _decode_jwt(token: str):
+USER_SIDS = {}   # uid -> sid
+SID_USERS = {}   # sid -> uid
+
+def _decode_access_token(token: str):
     try:
-        return pyjwt.decode(token, app.config["JWT_SECRET_KEY"], algorithms=["HS256"])
+        claims = decode_token(token)  # uses Flask-JWT-Extended keys/options
+        sub = claims.get("sub")
+        uid = int(sub) if str(sub).isdigit() else None
+        return uid, claims.get("username")
     except Exception:
-        return None
+        return None, None
 
-UID_TO_SID = {}
-SID_TO_UID = {}
-SID_TO_NAME = {}
-PENDING = {}
-
-# ----------------- Auth -----------------
+# ------------ Auth API ------------
 @app.post("/auth/register")
 def register():
     data = request.get_json(force=True) or {}
@@ -120,7 +122,8 @@ def register():
              password_hash=generate_password_hash(password),
              code=gen_code())
     db.session.add(u); db.session.commit()
-    access  = create_access_token(identity=str(u.id), additional_claims={"username": u.username})
+    # IMPORTANT: make sub a string to avoid PyJWT "Subject must be a string"
+    access = create_access_token(identity=str(u.id), additional_claims={"username": u.username})
     refresh = create_refresh_token(identity=str(u.id))
     return {"access_token": access, "refresh_token": refresh,
             "user": {"id": u.id, "username": u.username, "code": u.code}}
@@ -133,7 +136,7 @@ def login():
     u = User.query.filter_by(username=username).first()
     if not u or not check_password_hash(u.password_hash, password):
         return {"error": "invalid credentials"}, 401
-    access  = create_access_token(identity=str(u.id), additional_claims={"username": u.username})
+    access = create_access_token(identity=str(u.id), additional_claims={"username": u.username})
     refresh = create_refresh_token(identity=str(u.id))
     return {"access_token": access, "refresh_token": refresh,
             "user": {"id": u.id, "username": u.username, "code": u.code}}
@@ -142,41 +145,42 @@ def login():
 @jwt_required(refresh=True)
 def refresh():
     uid = get_jwt_identity()
-    u = db.session.get(User, int(uid)) if uid is not None else None
-    if not u: return {"error": "user not found"}, 401
+    u = db.session.get(User, int(uid))
+    if not u: return {"error": "user not found"}, 404
     access = create_access_token(identity=str(u.id), additional_claims={"username": u.username})
     return {"access_token": access}
 
 @app.get("/auth/me")
-@jwt_required()
-def me():
-    uid = get_jwt_identity()
-    u = db.session.get(User, int(uid)) if uid is not None else None
-    if not u: return {"error": "user not found"}, 401
-    return {"id": u.id, "username": u.username, "email": u.email, "code": u.code}
+def whoami():
+    # nice UX: if missing/invalid token just say "not logged in"
+    auth = request.headers.get("Authorization", "")
+    token = auth.split("Bearer ", 1)[-1].strip() if "Bearer " in auth else None
+    if not token:
+        return {"logged_in": False}, 200
+    uid, _ = _decode_access_token(token)
+    if not uid:
+        return {"logged_in": False}, 200
+    u = db.session.get(User, uid)
+    if not u: return {"logged_in": False}, 200
+    return {"logged_in": True, "id": u.id, "username": u.username, "email": u.email, "code": u.code}, 200
 
-# ----------------- ID / Search / Messages -----------------
+# ------------ App API ------------
 @app.post("/id")
 @jwt_required()
 def regen_code():
     uid = int(get_jwt_identity())
     u = db.session.get(User, uid)
     if not u: return {"error": "user not found"}, 404
-    data = request.get_json(force=True) or {}
-    if (data.get("action") or "") == "regenerate_code":
-        u.code = gen_code()
-        db.session.commit()
+    u.code = gen_code(); db.session.commit()
     return {"id": u.id, "username": u.username, "code": u.code}
 
 @app.get("/search")
 @jwt_required()
 def search_users():
-    q = (request.args.get("q") or "").strip()
+    q = (request.args.get("q") or "").strip().upper()
     if not q: return {"results": []}
-    by_code = User.query.filter(User.code == q.upper()).all()
-    by_name = (User.query
-               .filter(func.lower(User.username).like(func.lower(f"{q}%")))
-               .limit(10).all())
+    by_code = User.query.filter(User.code == q).all()
+    by_name = (User.query.filter(func.lower(User.username).like(func.lower(f"{q}%"))).limit(10).all())
     seen, results = set(), []
     for u in by_code + by_name:
         if u.id in seen: continue
@@ -188,8 +192,7 @@ def search_users():
 @jwt_required()
 def get_messages(room):
     msgs = (Message.query.filter_by(room=room)
-            .order_by(Message.created_at.desc())
-            .limit(50).all())
+            .order_by(Message.created_at.desc()).limit(50).all())
     return [{
         "id": m.id, "room": m.room, "sender_id": m.sender_id,
         "sender_name": m.sender_name, "text": m.text,
@@ -197,117 +200,117 @@ def get_messages(room):
     } for m in msgs]
 
 @app.get("/health")
-def health(): return {"ok": True}
+def health():
+    return {"ok": True}
 
-@app.get("/favicon.ico")
-def favicon(): return ("", 204)
-
-# silence chrome devtools well-known lookups
-@app.get("/.well-known/<path:rest>")
-def well_known(rest): return ("", 204)
-
-# ----------------- Static / SPA -----------------
+# ------------ Static (SPA) ------------
 @app.get("/")
 def serve_index():
-    root = Path(app.static_folder).resolve()
-    idx = root / "index.html"
-    if idx.exists(): return send_from_directory(root, "index.html")
-    return {"error": f"index.html not found in {root}"}, 404
+    idx = Path(app.static_folder) / "index.html"
+    if idx.exists(): return send_from_directory(app.static_folder, "index.html")
+    return {"error": f"index.html not found in {app.static_folder}"}, 404
 
 @app.get("/<path:filename>")
-def serve_static(filename: str):
+def serve_assets(filename):
     root = Path(app.static_folder).resolve()
     target = (root / filename).resolve()
-    if not str(target).startswith(str(root)): return {"error": "forbidden"}, 403
-    if target.is_file(): return send_from_directory(root, filename)
+    if str(target).startswith(str(root)) and target.is_file():
+        return send_from_directory(root, filename)
+    # SPA fallback
     idx = root / "index.html"
     if idx.exists(): return send_from_directory(root, "index.html")
     return {"error": "not found"}, 404
 
-# ----------------- Socket.IO -----------------
+# ------------ Socket.IO ------------
 @sio.on("connect")
 def sio_connect(auth):
     token = None
     if isinstance(auth, dict):
         token = auth.get("token")
-    token = token or request.args.get("token")
     if not token:
-        print("SIO connect blocked: no token"); return False
-    claims = _decode_jwt(token)
-    if not claims:
-        print("SIO connect blocked: bad token"); return False
-    try:
-        uid = int(claims.get("sub"))
-    except Exception:
-        print("SIO connect blocked: sub not int"); return False
-    username = claims.get("username", f"user{uid}")
-    UID_TO_SID[uid] = request.sid
-    SID_TO_UID[request.sid] = uid
-    SID_TO_NAME[request.sid] = username
-    emit("connected", {"uid": uid})
+        token = request.args.get("token")
+    uid, username = _decode_access_token(token or "")
+    if not uid:
+        return False  # reject
+    USER_SIDS[uid] = request.sid
+    SID_USERS[request.sid] = uid
+    emit("whoami", {"id": uid, "username": username})
 
 @sio.on("disconnect")
 def sio_disconnect():
     sid = request.sid
-    uid = SID_TO_UID.pop(sid, None)
-    SID_TO_NAME.pop(sid, None)
-    if uid and UID_TO_SID.get(uid) == sid:
-        UID_TO_SID.pop(uid, None)
+    uid = SID_USERS.pop(sid, None)
+    if uid and USER_SIDS.get(uid) == sid:
+        USER_SIDS.pop(uid, None)
 
+# ---- pairing with request/accept flow ----
 @sio.on("pair_with_code")
-def pair_with_code(data):
-    sid = request.sid
-    me_uid = SID_TO_UID.get(sid)
-    if not me_uid: emit("pair_error", {"error": "not authenticated"}); return
+def sio_pair_with_code(data):
+    me = SID_USERS.get(request.sid)
+    if not me: return
     code = ((data or {}).get("peer_code") or "").strip().upper()
     peer = User.query.filter_by(code=code).first()
-    if not peer: emit("pair_error", {"error": "peer not found"}); return
-    if peer.id == me_uid: emit("pair_error", {"error": "cannot pair with yourself"}); return
-    peer_sid = UID_TO_SID.get(peer.id)
-    if not peer_sid: emit("pair_error", {"error": "peer is offline"}); return
+    if not peer:
+        emit("pair_error", {"error": "peer not found"}); return
+    if peer.id == me:
+        emit("pair_error", {"error": "cannot pair with yourself"}); return
+    pr = PairRequest(from_id=me, to_id=peer.id, status="pending")
+    db.session.add(pr); db.session.commit()
+    peer_sid = USER_SIDS.get(peer.id)
+    if peer_sid:
+        emit("pair_request", {
+            "request_id": pr.id,
+            "from": {"id": me, "username": User.query.get(me).username}
+        }, to=peer_sid)
+    emit("pair_request_sent", {"request_id": pr.id})
 
-    rm = room_for(me_uid, peer.id)
-    PENDING[rm] = {"from_uid": me_uid, "to_uid": peer.id, "from_sid": sid, "to_sid": peer_sid}
-    sio.server.enter_room(sid, rm)  # initiator joins
-    emit("pair_pending")
-    sio.emit("pair_request", {"room": rm, "from": {"id": me_uid, "username": SID_TO_NAME.get(sid,"")}}, to=peer_sid)
-
-@sio.on("pair_accept")
-def pair_accept(data):
-    rm = (data or {}).get("room")
-    if not rm or rm not in PENDING: emit("pair_error", {"error": "no such pair"}); return
-    rec = PENDING.pop(rm)
-    sio.server.enter_room(request.sid, rm)
-    if rec.get("from_sid"):
-        try: sio.server.enter_room(rec["from_sid"], rm)
-        except Exception: pass
-    sio.emit("paired", {"room": rm}, to=rec["from_sid"])
+@sio.on("pair_response")
+def sio_pair_response(data):
+    me = SID_USERS.get(request.sid)
+    if not me: return
+    rid = int((data or {}).get("request_id") or 0)
+    accept = bool((data or {}).get("accept"))
+    pr = db.session.get(PairRequest, rid)
+    if not pr or pr.to_id != me or pr.status != "pending":
+        emit("pair_error", {"error": "invalid request"}); return
+    pr.status = "accepted" if accept else "declined"; db.session.commit()
+    from_sid = USER_SIDS.get(pr.from_id)
+    if not accept:
+        if from_sid: emit("pair_declined", {"request_id": rid}, to=from_sid)
+        emit("pair_declined", {"request_id": rid}); return
+    # accepted -> tell both clients the room id
+    rm = room_for(pr.from_id, pr.to_id)
+    if from_sid: emit("paired", {"room": rm}, to=from_sid)
     emit("paired", {"room": rm})
 
-@sio.on("pair_reject")
-def pair_reject(data):
+@sio.on("join_room")
+def sio_join(data):
     rm = (data or {}).get("room")
-    if not rm or rm not in PENDING: return
-    rec = PENDING.pop(rm)
-    sio.emit("pair_error", {"error": "peer declined"}, to=rec["from_sid"])
+    if rm: join_room(rm)
 
+@sio.on("leave_room")
+def sio_leave(data):
+    rm = (data or {}).get("room")
+    if rm: leave_room(rm)
+
+# chat
 @sio.on("send_message")
-def send_message(data):
-    sid = request.sid
-    uid = SID_TO_UID.get(sid)
-    name = SID_TO_NAME.get(sid, f"user{uid or ''}")
+def sio_send_message(data):
+    uid = SID_USERS.get(request.sid)
+    if not uid: return
     rm = (data or {}).get("room") or ""
     txt = ((data or {}).get("text") or "").strip()
-    if not rm or not txt or not uid: return
-    msg = Message(room=rm, sender_id=uid, sender_name=name, text=txt)
+    if not rm or not txt: return
+    u = db.session.get(User, uid)
+    msg = Message(room=rm, sender_id=uid, sender_name=u.username, text=txt)
     db.session.add(msg); db.session.commit()
     emit("new_message", {
-        "id": msg.id, "room": rm, "sender_id": msg.sender_id,
-        "sender_name": msg.sender_name, "text": msg.text,
+        "id": msg.id, "room": rm, "sender_id": uid,
+        "sender_name": u.username, "text": msg.text,
         "created_at": msg.created_at.isoformat()
     }, room=rm)
 
-# ---- WebRTC signaling passthrough ----
+# signaling
 @sio.on("rtc-offer")
 def rtc_offer(data):
     rm = (data or {}).get("room"); sdp = (data or {}).get("sdp")
@@ -323,13 +326,7 @@ def rtc_ice(data):
     rm = (data or {}).get("room"); cand = (data or {}).get("candidate")
     if rm and cand: emit("rtc-ice", {"candidate": cand}, room=rm, include_self=False)
 
-@sio.on("set_voice_variant")
-def set_voice_variant(data):
-    rm = (data or {}).get("room")
-    variant = ((data or {}).get("variant") or "lady").lower()
-    emit("voice_variant", {"room": rm, "from": SID_TO_NAME.get(request.sid,""), "variant": variant}, room=rm)
-
+# ------------ Main ------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    ssl_ctx = "adhoc" if os.getenv("HTTPS", "0") == "1" else None  # set HTTPS=1 to enable self-signed HTTPS
-    sio.run(app, host="0.0.0.0", port=port, ssl_context=ssl_ctx)
+    sio.run(app, host="0.0.0.0", port=port)

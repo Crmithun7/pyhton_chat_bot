@@ -1,136 +1,75 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Chat + Call + Voice (Frontend)</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27/>">
-  <style>
-    :root { --bg:#0b1020; --panel:#121935; --border:#25305c; --muted:#a7b6ff; --text:#eaf1ff; }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background: var(--bg); color: var(--text); }
-    header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; background: var(--panel); border-bottom:1px solid var(--border); position: sticky; top: 0; z-index: 10; }
-    h1 { margin: 0; font-size: 18px; }
-    .pill { border:1px solid var(--border); border-radius:999px; padding:4px 10px; font-size:12px; color:var(--muted); }
-    main { display:grid; grid-template-columns: 360px 1fr; gap:16px; padding:16px; }
-    .card { background: var(--panel); border:1px solid var(--border); border-radius:14px; padding:12px; }
-    .row { display:flex; align-items:center; gap:8px; margin:6px 0; }
-    .col { display:flex; flex-direction:column; gap:8px; }
-    input, button, select { background:#0f1634; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:8px 10px; }
-    button { cursor: pointer; }
-    small { color: var(--muted); }
-    hr { border:0; border-top:1px solid var(--border); margin:12px 0; }
-    #results button { margin: 4px 0; }
-    .chat { height: 260px; overflow: auto; background:#0f1634; border:1px solid var(--border); border-radius:10px; padding:8px; }
-    .msg { margin:6px 0; padding:6px 8px; background:#1b2552; border-radius:8px; }
-    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    video { width:100%; border-radius:10px; background:#000; }
-    footer { text-align:center; color:var(--muted); padding:8px; }
-    @media (max-width: 900px) { main{ grid-template-columns: 1fr; } }
-    /* Incoming request banner */
-    #incomingBox { display:none; position:fixed; left:50%; top:16px; transform:translateX(-50%); background:#0f1634; border:1px solid var(--border); border-radius:12px; padding:10px 12px; z-index:9999; box-shadow:0 10px 30px rgba(0,0,0,.4); }
-    #incomingBox .btns { display:flex; gap:8px; margin-top:8px; justify-content:flex-end; }
-  </style>
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Learn python</title>
+<style>
+:root { --bg:#0b1020; --panel:#121935; --border:#25305c; --muted:#a7b6ff; --text:#eaf1ff; }
+*{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
+h1{margin:0;font-size:18px}.pill{border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted)}
+main{display:grid;grid-template-columns:360px 1fr;gap:16px;padding:16px}.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px}
+.row{display:flex;align-items:center;gap:8px;margin:6px 0}.col{display:flex;flex-direction:column;gap:8px}
+input,button,select{background:#0f1634;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 10px}
+button{cursor:pointer} small{color:var(--muted)} hr{border:0;border-top:1px solid var(--border);margin:12px 0}
+#results button{margin:4px 0}.chat{height:260px;overflow:auto;background:#0f1634;border:1px solid var(--border);border-radius:10px;padding:8px}
+.msg{margin:6px 0;padding:6px 8px;background:#1b2552;border-radius:8px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+video{width:100%;border-radius:10px;background:#000} footer{text-align:center;color:var(--muted);padding:8px}
+@media (max-width: 900px){main{grid-template-columns:1fr}}
+</style>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
-  <header>
-    <h1>⚡ Chat + Call + Voice</h1>
-    <span id="who" class="pill">not logged in</span>
-  </header>
+<header>
+  <h1>⚡Learn python</h1>
+  <span id="who" class="pill">AI</span>
+</header>
 
-  <!-- Incoming Pair Request -->
-  <div id="incomingBox">
-    <div id="incomingText">Incoming pair request…</div>
-    <div class="btns">
-      <button id="btnAccept">Accept</button>
-      <button id="btnDecline">Reject</button>
+<main>
+  <section class="card">
+    <div class="col">
+      <h3>1) API Settings</h3>
+      <div class="row">
+        <input id="apiBase" value="" style="flex:1"/>
+        <button id="saveApi">Save</button>
+        <button id="testApi">Test</button>
+      </div>
+      <small>Default guesses http://[this-host]:5000</small>
+      <hr/>
+      <h3>2) Register / Login</h3>
+      <div class="row"><input id="username" placeholder="username"/><input id="password" type="password" placeholder="password"/></div>
+      <div class="row"><button id="btnRegister">Register</button><button id="btnLogin">Login</button><button id="btnLogout">Logout</button></div>
+      <small>JWT is saved and sent to Socket.IO.</small>
+      <hr/>
+      <h3>3) Your ID</h3>
+      <div class="row"><input id="myCode" readonly/><button id="btnRegen">Regenerate</button></div>
+      <hr/>
+      <h3>4) Search & Pair</h3>
+      <div class="row"><input id="search" placeholder="friend code or username..." style="flex:1"/><button id="btnSearch">Search</button></div>
+      <div id="results"></div>
     </div>
-  </div>
+  </section>
 
-  <main>
-    <section class="card">
-      <div class="col">
-        <h3>1) API Settings</h3>
-        <div class="row">
-          <input id="apiBase" value="" style="flex:1" />
-          <button id="saveApi">Save</button>
-          <button id="testApi">Test</button>
-        </div>
-        <small>Auto-detects backend at <code>http://[this-host]:5000</code>.</small>
-
-        <hr/>
-        <h3>2) Register / Login</h3>
-        <div class="row">
-          <input id="username" placeholder="username" />
-          <input id="password" type="password" placeholder="password" />
-        </div>
-        <div class="row">
-          <button id="btnRegister">Register</button>
-          <button id="btnLogin">Login</button>
-          <button id="btnLogout">Logout</button>
-        </div>
-        <small>JWT is stored in localStorage and sent to Socket.IO on connect.</small>
-
-        <hr/>
-        <h3>3) Your ID</h3>
-        <div class="row">
-          <input id="myCode" readonly />
-          <button id="btnRegen">Regenerate</button>
-        </div>
-
-        <hr/>
-        <h3>4) Search & Pair</h3>
-        <div class="row">
-          <input id="search" placeholder="friend code or username..." style="flex:1"/>
-          <button id="btnSearch">Search</button>
-        </div>
-        <div id="results"></div>
-        <small id="pairStatus" class="pill" style="display:inline-block;margin-top:6px;">not paired</small>
+  <section class="card">
+    <div class="grid2">
+      <div>
+        <h3>Call Controls</h3>
+        <div class="row"><button id="btnCall" disabled>Start Call</button><button id="btnHang">Hang Up</button><span class="pill" id="roomPill">room: -</span></div>
+        <video id="me" autoplay playsinline muted></video>
+        <video id="peer" autoplay playsinline></video>
       </div>
-    </section>
-
-    <section class="card">
-      <div class="grid2">
-        <div>
-          <h3>Call Controls</h3>
-          <div class="row">
-            <select id="voiceSelect">
-              <option value="woman">🎙️ Woman</option>
-              <option value="girl">🎙️ Girl</option>
-              <option value="lady" selected>🎙️ Lady</option>
-              <option value="custom">🛠️ Custom</option>
-            </select>
-            <button id="btnSetVoice">Apply</button>
-          </div>
-          <div id="customBox" class="col" style="display:none;">
-            <label>Brightness (0-2) <input id="brightness" type="range" min="0" max="2" value="1.2" step="0.05" /></label>
-            <label>Wet mix (0-1) <input id="wet" type="range" min="0" max="1" value="0.4" step="0.05" /></label>
-          </div>
-          <div class="row">
-            <button id="btnCall">Start Call</button>
-            <button id="btnHang">Hang Up</button>
-            <span class="pill" id="roomPill">room: -</span>
-          </div>
-          <video id="me" autoplay playsinline muted></video>
-          <video id="peer" autoplay playsinline></video>
-        </div>
-        <div>
-          <h3>Chat</h3>
-          <div class="chat" id="chat"></div>
-          <div class="row">
-            <input id="chatInput" placeholder="type message..." style="flex:1"/>
-            <button id="sendMsg">Send</button>
-          </div>
-          <small>Messages persist to SQLite. Latest 50 shown.</small>
-        </div>
+      <div>
+        <h3>Chat</h3>
+        <div class="chat" id="chat"></div>
+        <div class="row"><input id="chatInput" placeholder="type message..." style="flex:1"/><button id="sendMsg">Send</button></div>
+        <small>Latest 50 messages shown.</small>
       </div>
-    </section>
-  </main>
+    </div>
+  </section>
+</main>
 
-  <footer>
-    <small>If camera/mic fail, serve this page over HTTP: <code>python -m http.server 5500</code> then open <code>http://127.0.0.1:5500</code>. On mobile, use HTTPS.</small>
-  </footer>
+<footer><small>If camera/mic fail in dev, open via: <code>python -m http.server 5500</code> → http://127.0.0.1:5500</small></footer>
 
 <script>
 function guessApiBase(){
@@ -140,298 +79,143 @@ function guessApiBase(){
   return `${proto}://${host}:5000`;
 }
 let API_BASE = localStorage.getItem('API_BASE') || guessApiBase();
-document.getElementById('apiBase').value = API_BASE;
-
-let token=null, me=null, socket=null, room=null;
-let pc=null, localStream=null, processedTrack=null, remoteStream=null;
-let ctx=null, srcNode=null, destNode=null, dryGain=null;
-let voicePreset='lady', pendingRoom=null;
-
 const $ = (id)=>document.getElementById(id);
-const isSecureContextOK = () =>
-  location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+$('apiBase').value = API_BASE;
 
-function setWho(){ $('who').textContent = me ? (me.username + ' · code ' + (me.code||'')) : 'not logged in'; }
-function logChat(who, text){
-  const d = document.createElement('div'); d.className='msg';
-  d.textContent = who + ": " + text;
-  $('chat').appendChild(d); $('chat').scrollTop = $('chat').scrollHeight;
-}
-function warn(t){ console.warn(t); alert(t); }
+let token = localStorage.getItem('ACCESS') || null;
+let me = null, socket = null, room = null, pc = null, localIn = null, localOut = null;
 
-function showIncoming(fromName, rm){
-  pendingRoom = rm;
-  $('incomingText').textContent = `${fromName} wants to pair with you`;
-  $('incomingBox').style.display = 'block';
-}
-function hideIncoming(){ $('incomingBox').style.display='none'; pendingRoom=null; }
-
-$('btnAccept').onclick = ()=>{ if(socket && pendingRoom){ socket.emit('pair_accept',{room:pendingRoom}); $('pairStatus').textContent='paired (connecting…)'; hideIncoming(); } };
-$('btnDecline').onclick = ()=>{ if(socket && pendingRoom){ socket.emit('pair_reject',{room:pendingRoom}); $('pairStatus').textContent='not paired'; hideIncoming(); } };
-
-$('saveApi').onclick = ()=>{
-  API_BASE = $('apiBase').value.trim().replace(/\/+$/,'');
-  localStorage.setItem('API_BASE', API_BASE);
-  alert('Saved API base: ' + API_BASE);
-};
-$('testApi').onclick = async ()=>{
-  try{ const j = await (await fetch(API_BASE + '/health',{mode:'cors'})).json(); alert('Backend OK: '+JSON.stringify(j)); }
-  catch{ alert('Cannot reach backend at ' + API_BASE); }
-};
+function setWho(){ $('who').textContent = me?.username ? `${me.username} · code ${me.code}` : 'not logged in'; }
+function logChat(who, text){ const d=document.createElement('div'); d.className='msg'; d.textContent=who+': '+text; $('chat').appendChild(d); $('chat').scrollTop=$('chat').scrollHeight; }
+function warn(t){ alert(t); console.warn(t); }
 
 async function api(path, method='GET', body=null){
   const headers = {'Content-Type':'application/json'};
-  if(token) headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(API_BASE + path, {method, headers, body: body?JSON.stringify(body):undefined, mode:'cors'});
-  if(!res.ok) throw new Error(await res.text() || (res.status+' '+res.statusText));
+  if(token) headers['Authorization'] = 'Bearer '+token;
+  const res = await fetch(API_BASE + path, {method, headers, body: body?JSON.stringify(body):undefined});
+  if(!res.ok){
+    if(res.status===401 || res.status===422){ return Promise.reject('not authorized'); }
+    const msg = await res.text(); throw new Error(msg || (res.status+' '+res.statusText));
+  }
   return res.json();
 }
 
-// ===== Auth =====
-$('btnRegister').onclick = async ()=>{
-  try {
-    const j = await api('/auth/register','POST',{username:$('username').value, password:$('password').value});
-    token = j.access_token; localStorage.setItem('ACCESS', token);
-    me = j.user; $('myCode').value = me.code; setWho(); connectSocket();
-    $('pairStatus').textContent = 'not paired';
-  } catch(e){ warn('register: '+e); }
-};
-$('btnLogin').onclick = async ()=>{
-  try {
-    const j = await api('/auth/login','POST',{username:$('username').value, password:$('password').value});
-    token = j.access_token; localStorage.setItem('ACCESS', token);
-    me = j.user; $('myCode').value = me.code; setWho(); connectSocket();
-    $('pairStatus').textContent = 'not paired';
-  } catch(e){ warn('login: '+e); }
-};
-$('btnLogout').onclick = ()=>{
-  token=null; localStorage.removeItem('ACCESS');
-  me=null; setWho(); if(socket){ socket.disconnect(); socket=null; }
-  cleanupMedia();
-  $('roomPill').textContent='room: -'; $('chat').innerHTML=''; $('pairStatus').textContent='not paired';
-};
-$('btnRegen').onclick = async ()=>{
-  try { const j = await api('/id','POST',{action:'regenerate_code'}); me.code=j.code; $('myCode').value=me.code; setWho(); }
-  catch(e){ warn(e); }
-};
+// settings
+$('saveApi').onclick = ()=>{ API_BASE = $('apiBase').value.trim().replace(/\/+$/,''); localStorage.setItem('API_BASE', API_BASE); alert('Saved'); };
+$('testApi').onclick = async ()=>{ try{ const j=await api('/health'); alert('Backend OK: '+JSON.stringify(j)); }catch(e){ alert('Cannot reach backend'); } };
 
+// auth
+async function afterAuth(j){
+  token = j.access_token; localStorage.setItem('ACCESS', token);
+  me = j.user || (await api('/auth/me')); $('myCode').value = me.code || ''; setWho(); connectSocket();
+}
+$('btnRegister').onclick = async ()=>{ try{ const j=await api('/auth/register','POST',{username:$('username').value,password:$('password').value}); await afterAuth(j); }catch(e){ warn(e); } };
+$('btnLogin').onclick = async ()=>{ try{ const j=await api('/auth/login','POST',{username:$('username').value,password:$('password').value}); await afterAuth(j); }catch(e){ warn(e); } };
+$('btnLogout').onclick = ()=>{ token=null; localStorage.removeItem('ACCESS'); me=null; setWho(); if(socket){ socket.disconnect(); socket=null; } $('roomPill').textContent='room: -'; $('chat').innerHTML=''; $('btnCall').disabled=true; };
+
+// regen id
+$('btnRegen').onclick = async ()=>{ try{ const j=await api('/id','POST'); me.code=j.code; $('myCode').value=me.code; setWho(); }catch(e){ warn(e); } };
+
+// search + pair
 $('btnSearch').onclick = async ()=>{
+  const q = $('search').value.trim(); if(!q) return;
   try{
-    const q = $('search').value.trim();
     const j = await api('/search?q='+encodeURIComponent(q));
     const box = $('results'); box.innerHTML='';
+    if(!j.results.length){ box.textContent = 'No results'; return; }
     j.results.forEach(u=>{
       const btn = document.createElement('button');
-      btn.textContent = `Pair with ${u.username} (${u.code})`;
-      btn.onclick = ()=> pairWithCode(u.code, u.username);
+      btn.textContent = `Request to pair with ${u.username} (${u.code})`;
+      btn.onclick = ()=> socket?.emit('pair_with_code', {peer_code:u.code});
       box.appendChild(btn); box.appendChild(document.createElement('br'));
     });
-    if(!j.results.length) box.textContent = 'No results';
   }catch(e){ warn(e); }
 };
 
+// socket
 function connectSocket(){
   if(!token) return warn('login first');
-  if(socket) socket.disconnect();
-  socket = io(API_BASE, { transports:['polling'], upgrade:false, auth:{token} });
-
+  if(socket){ socket.disconnect(); }
+  socket = io(API_BASE, { transports: ['polling'], auth: { token } }); // polling works everywhere; WS enabled in prod
   socket.on('connect', ()=> console.log('socket connected'));
-  socket.on('connect_error', (err)=> warn('socket error: '+err.message));
-  socket.on('connected', (j)=> console.log('authed as uid', j && j.uid));
+  socket.on('whoami', ()=> console.log('authed'));
+  socket.on('pair_request_sent', ()=> alert('Pair request sent'));
+  socket.on('pair_error', j=> warn(j.error));
 
-  socket.on('pair_pending', ()=> { $('pairStatus').textContent='pair request sent…'; });
-  socket.on('pair_error',  (j)=> { warn(j.error || 'pair error'); $('pairStatus').textContent='not paired'; });
-  socket.on('pair_request', (j)=> showIncoming(j.from.username, j.room));
+  socket.on('pair_request', (j)=>{
+    const ok = confirm(`Accept pair request from ${j.from.username}?`);
+    socket.emit('pair_response', {request_id: j.request_id, accept: ok});
+  });
+  socket.on('pair_declined', ()=> alert('Pair request declined'));
   socket.on('paired', async (j)=>{
-    room = j.room; $('roomPill').textContent='room: '+room; $('pairStatus').textContent='paired'; hideIncoming();
-    try{ const msgs = await api('/messages/'+room,'GET'); $('chat').innerHTML=''; msgs.reverse().forEach(m=>logChat(m.sender_name, m.text)); }catch(e){}
-  });
-
-  socket.on('new_message', (m)=> logChat(m.sender_name, m.text));
-
-  // ---- Signaling ----
-  socket.on('rtc-offer', async ({room: rm, sdp})=>{
+    room = j.room; $('roomPill').textContent='room: '+room; $('btnCall').disabled=false;
+    socket.emit('join_room', {room});
     try{
-      // Try to get media; if blocked (non-secure), continue without local tracks
-      if(!localStream) await ensureMedia().catch(()=>{});
-      await createPC(); // will add whatever we have (or none)
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-      const ans = await pc.createAnswer();
-      await pc.setLocalDescription(ans);
-      socket.emit('rtc-answer', {room: rm, sdp: pc.localDescription});
-    }catch(e){ warn('answer failed: '+e); }
+      const msgs = await api('/messages/'+room, 'GET');
+      $('chat').innerHTML=''; msgs.reverse().forEach(m=>logChat(m.sender_name, m.text));
+    }catch(_){}
   });
-  socket.on('rtc-answer', async ({sdp})=>{
-    try{ if(pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp)); }catch(e){ console.warn(e); }
+  socket.on('new_message', m=> logChat(m.sender_name, m.text));
+
+  // signaling
+  socket.on('rtc-offer', async ({sdp})=>{
+    await ensureMedia();
+    if(!pc) await createPC();
+    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    const ans = await pc.createAnswer();
+    await pc.setLocalDescription(ans);
+    socket.emit('rtc-answer', {room, sdp: pc.localDescription});
   });
-  socket.on('rtc-ice', async ({candidate})=>{
-    try{ if(pc && candidate) await pc.addIceCandidate(candidate); }catch(e){ console.warn('addIceCandidate', e); }
-  });
+  socket.on('rtc-answer', async ({sdp})=>{ if(pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp)); });
+  socket.on('rtc-ice', async ({candidate})=>{ try{ if(pc && candidate) await pc.addIceCandidate(candidate); }catch(e){ console.warn(e); } });
 }
 
-async function pairWithCode(code, name){
-  if(!socket) return warn('login first');
-  $('pairStatus').textContent = `requesting ${name||''}…`;
-  socket.emit('pair_with_code', {peer_code: code});
-}
-
-// ===== Chat =====
+// chat send
 $('sendMsg').onclick = ()=>{
   if(!room) return warn('pair first');
   const text = $('chatInput').value.trim(); if(!text) return;
-  socket.emit('send_message', {room, text});
-  $('chatInput').value='';
+  socket.emit('send_message', {room, text}); $('chatInput').value='';
 };
 
-// ===== Voice UI =====
-$('voiceSelect').onchange = ()=>{
-  voicePreset = $('voiceSelect').value;
-  $('customBox').style.display = (voicePreset==='custom') ? 'block' : 'none';
-};
-$('btnSetVoice').onclick = ()=>{
-  if(!room) return warn('pair first');
-  const custom = voicePreset==='custom' ? {brightness: parseFloat($('brightness').value), wet: parseFloat($('wet').value)} : null;
-  socket.emit('set_voice_variant', {room, variant: voicePreset, custom});
-  if(localStream) applyVoice(localStream, voicePreset, custom);
-};
+// WebRTC
+$('btnCall').onclick = async ()=>{ if(!room) return warn('pair first'); await startCall(); };
+$('btnHang').onclick = async ()=>{ await endCall(); };
 
-// ===== Call buttons =====
-$('btnCall').onclick = async ()=>{
-  if(!room) return warn('pair first');
-  if(!isSecureContextOK()){
-    warn('Your page is not HTTPS and not localhost. Browsers block mic/cam. Start backend with HTTPS=1 and reload from https://<your-LAN-ip>:5000');
-    // You can still receive the peer’s media; proceed without local tracks.
-  }
-  try{
-    // Try to capture; if blocked, continue with no local tracks (one-way receive)
-    await ensureMedia().catch(()=>{});
-    await createPC();
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    socket.emit('rtc-offer', {room, sdp: pc.localDescription});
-  }catch(e){ warn('call failed: '+e); }
-};
-$('btnHang').onclick = ()=> cleanupMedia();
-
-// ===== Media / WebAudio =====
 async function ensureMedia(){
-  if(localStream) return localStream;
-  const constraints = {audio:true, video:true};
-  localStream = await navigator.mediaDevices.getUserMedia(constraints);
-  $('me').srcObject = localStream;
-  await applyVoice(localStream, voicePreset, voicePreset==='custom'?{brightness:parseFloat($('brightness').value), wet:parseFloat($('wet').value)}:null);
-  return localStream;
+  if(localIn) return;
+  localIn = await navigator.mediaDevices.getUserMedia({audio:true, video:true});
+  $('me').srcObject = localIn;
 }
-
-function makeCurve(amount){
-  const n=256, curve=new Float32Array(n); const k=typeof amount==='number'?amount:0.6;
-  for(let i=0;i<n;i++){ let x=i*2/n-1; curve[i]=(1+k)*x/(1+k*Math.abs(x)); }
-  return curve;
-}
-
-async function applyVoice(stream, preset, custom){
-  if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-  try{ if(srcNode) srcNode.disconnect(); }catch(_){}
-  try{ if(dryGain) dryGain.disconnect(); }catch(_){}
-
-  srcNode = ctx.createMediaStreamSource(stream);
-  destNode = ctx.createMediaStreamDestination();
-  dryGain = ctx.createGain(); dryGain.gain.value = 0.6;
-  const wetGain = ctx.createGain(); wetGain.gain.value = (custom?.wet ?? 0.4);
-
-  const hp = ctx.createBiquadFilter(); hp.type='highpass';
-  const presence = ctx.createBiquadFilter(); presence.type='peaking';
-  const delay = ctx.createDelay(); delay.delayTime.value = 0.012;
-  const lfo = ctx.createOscillator(); lfo.frequency.value = 6.0;
-  const lfoGain = ctx.createGain(); lfoGain.gain.value = 0.004;
-  lfo.connect(lfoGain).connect(delay.delayTime); lfo.start();
-
-  const shaper = ctx.createWaveShaper(); shaper.curve = makeCurve(0.6);
-  const shelf = ctx.createBiquadFilter(); shelf.type='peaking'; shelf.frequency.value=4500; shelf.gain.value=3;
-
-  function setPreset(p){
-    if(p==='woman'){ hp.frequency.value=160; presence.frequency.value=3000; presence.gain.value=6; presence.Q.value=1.0; wetGain.gain.value=0.45; }
-    else if(p==='girl'){ hp.frequency.value=220; presence.frequency.value=3300; presence.gain.value=8; presence.Q.value=1.2; wetGain.gain.value=0.5; }
-    else if(p==='lady'){ hp.frequency.value=180; presence.frequency.value=2800; presence.gain.value=5; presence.Q.value=0.9; wetGain.gain.value=0.4; }
-    else { const b = custom?.brightness ?? 1.2; const w = custom?.wet ?? 0.4;
-           hp.frequency.value = 120 + 170*b; presence.frequency.value = 2600*b; presence.gain.value = 5*b; presence.Q.value = 0.9; wetGain.gain.value = w; }
-  }
-  setPreset(preset);
-
-  srcNode.connect(dryGain);
-  srcNode.connect(hp); hp.connect(presence); presence.connect(delay); delay.connect(shaper); shaper.connect(shelf); shelf.connect(wetGain);
-
-  const mix = ctx.createGain();
-  dryGain.connect(mix); wetGain.connect(mix);
-  mix.connect(destNode);
-
-  processedTrack = destNode.stream.getAudioTracks()[0];
-
-  // preview local (processed audio + original video)
-  const tracks = [processedTrack];
-  const videoTrack = stream.getVideoTracks()[0];
-  if(videoTrack) tracks.push(videoTrack);
-  $('me').srcObject = new MediaStream(tracks);
-
-  // if already in a call, swap the sender's audio track
-  if(pc){
-    const sender = pc.getSenders().find(s=>s.track && s.track.kind==='audio');
-    if(sender) sender.replaceTrack(processedTrack);
-  }
-}
-
 async function createPC(){
-  if(pc) return pc;
   pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+  pc.onicecandidate = e=>{ if(e.candidate) socket.emit('rtc-ice', {room, candidate:e.candidate}); };
+  pc.ontrack = e=>{ $('peer').srcObject = e.streams[0]; };
 
-  // aggregate all incoming tracks into one stream
-  remoteStream = new MediaStream();
-  pc.ontrack = (e)=>{
-    e.streams[0].getTracks().forEach(t=> remoteStream.addTrack(t));
-    $('peer').srcObject = remoteStream;
-  };
-  pc.onicecandidate = (e)=>{ if(e.candidate) socket.emit('rtc-ice', {room, candidate:e.candidate}); };
-
-  // add whatever we have (can be zero tracks if gUM failed)
-  let outStream = new MediaStream();
-  if(processedTrack) outStream.addTrack(processedTrack);
-  if(localStream){
-    localStream.getVideoTracks().forEach(t=> outStream.addTrack(t));
-    if(!processedTrack){
-      const mic = localStream.getAudioTracks()[0]; if(mic) outStream.addTrack(mic);
-    }
-  }
-  outStream.getTracks().forEach(t=> pc.addTrack(t, outStream));
-  return pc;
+  // use one outbound stream to keep things simple
+  localOut = new MediaStream();
+  localIn.getTracks().forEach(t=> localOut.addTrack(t));
+  localOut.getTracks().forEach(t=> pc.addTrack(t, localOut));
 }
-
-function cleanupMedia(){
-  try{ if(pc){ pc.getSenders().forEach(s=>s.track && s.track.stop()); pc.close(); } }catch(_){}
-  pc=null;
-  try{ if(localStream){ localStream.getTracks().forEach(t=>t.stop()); } }catch(_){}
-  localStream=null; processedTrack=null;
-  try{ if(ctx){ ctx.close(); } }catch(_){}
-  ctx=null;
+async function startCall(){
+  await ensureMedia();
+  if(!pc) await createPC();
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit('rtc-offer', {room, sdp: pc.localDescription});
+}
+async function endCall(){
+  if(pc){ pc.getSenders().forEach(s=> s.track && s.track.stop()); pc.close(); pc=null; }
+  if(localIn){ localIn.getTracks().forEach(t=>t.stop()); localIn=null; }
   $('me').srcObject=null; $('peer').srcObject=null;
 }
 
-// ===== Bootstrap =====
-(async function bootstrap(){
-  // Warn quickly if not secure context on LAN (phone/tablet case)
-  if(!isSecureContextOK()){
-    console.log('Non-secure context detected. Use HTTPS=1 for mic/cam on mobile.');
-  }
+// bootstrap
+(async function boot(){
   try{
-    const saved = localStorage.getItem('ACCESS');
-    if(saved){
-      token = saved;
-      const meResp = await api('/auth/me','GET');
-      me = meResp; $('myCode').value = me.code; setWho(); connectSocket();
-    } else { setWho(); }
-  }catch(e){
-    // token invalid/stale – clear quietly
-    token=null; localStorage.removeItem('ACCESS'); setWho();
-  }
+    const meResp = await api('/auth/me', 'GET');
+    if(meResp.logged_in){ me = meResp; $('myCode').value = me.code; setWho(); connectSocket(); }
+    else { setWho(); }
+  }catch{ setWho(); }
 })();
 </script>
 </body>
