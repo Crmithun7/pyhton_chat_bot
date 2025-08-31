@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Chat + Call + Voice (Frontend)</title>
+  <title>learn python</title>
   <style>
     :root { --bg:#0b1020; --panel:#121935; --border:#25305c; --muted:#a7b6ff; --text:#eaf1ff; }
     * { box-sizing: border-box; }
@@ -27,12 +27,11 @@
     footer { text-align:center; color:var(--muted); padding:8px; }
     @media (max-width: 900px) { main{ grid-template-columns: 1fr; } }
   </style>
-  <!-- Socket.IO client (compatible with python-socketio 5.x) -->
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
   <header>
-    <h1>⚡ Chat + Call + Voice (Frontend)</h1>
+    <h1>⚡ learn python</h1>
     <span id="who" class="pill">not logged in</span>
   </header>
 
@@ -45,11 +44,7 @@
           <button id="saveApi">Save</button>
           <button id="testApi">Test</button>
         </div>
-        <small>
-          If this page is served by Flask (port 5000), it uses the same origin automatically.<br/>
-          Otherwise it defaults to <code>http://[this-host]:5000</code>.
-        </small>
-
+        <small>When served by Flask (port 5000), it auto-uses same origin.</small>
         <hr/>
         <h3>2) Register / Login</h3>
         <div class="row">
@@ -61,15 +56,13 @@
           <button id="btnLogin">Login</button>
           <button id="btnLogout">Logout</button>
         </div>
-        <small>JWT is stored in localStorage and sent to Socket.IO on connect.</small>
-
+        <small>JWT lives in localStorage and is sent to Socket.IO.</small>
         <hr/>
         <h3>3) Your ID</h3>
         <div class="row">
           <input id="myCode" readonly />
           <button id="btnRegen">Regenerate</button>
         </div>
-
         <hr/>
         <h3>4) Search & Pair</h3>
         <div class="row">
@@ -112,20 +105,16 @@
             <input id="chatInput" placeholder="type message..." style="flex:1"/>
             <button id="sendMsg">Send</button>
           </div>
-          <small>Messages persist to SQLite. Latest 50 shown.</small>
+          <small>Latest 50 messages shown.</small>
         </div>
       </div>
     </section>
   </main>
 
-  <footer>
-    <small>If camera/mic fail, on desktop you can use HTTP localhost. On mobile, use HTTPS.</small>
-  </footer>
+  <footer><small>On mobile, use HTTPS to access camera/mic.</small></footer>
 
 <script>
-// ====== Auto-detect backend base (prefer same-origin) ======
 function guessApiBase(){
-  // If this page is served by Flask on port 5000, use same-origin
   if (location.port === '5000') return location.origin;
   let host = location.hostname || '127.0.0.1';
   if (host === 'localhost') host = '127.0.0.1';
@@ -137,288 +126,169 @@ document.getElementById('apiBase').value = API_BASE;
 
 let token=null, me=null, socket=null, room=null, pc=null, localStream=null, processedTrack=null, voicePreset='lady';
 let ctx=null, srcNode=null, destNode=null, dryGain=null;
-
 const $ = (id)=>document.getElementById(id);
 function setWho(){ $('who').textContent = me ? (me.username + ' · code ' + (me.code||'')) : 'not logged in'; }
-function logChat(who, text){
-  const d = document.createElement('div'); d.className='msg';
-  d.textContent = who + ": " + text;
-  $('chat').appendChild(d); $('chat').scrollTop = $('chat').scrollHeight;
-}
+function logChat(who, text){ const d=document.createElement('div'); d.className='msg'; d.textContent=who+": "+text; $('chat').appendChild(d); $('chat').scrollTop=$('chat').scrollHeight; }
 function warn(t){ alert(t); console.warn(t); }
 
-$('saveApi').onclick = ()=>{
-  API_BASE = $('apiBase').value.trim().replace(/\/+$/,'');
-  localStorage.setItem('API_BASE', API_BASE);
-  alert('Saved API base: ' + API_BASE);
-};
+$('saveApi').onclick = ()=>{ API_BASE = $('apiBase').value.trim().replace(/\/+$/,''); localStorage.setItem('API_BASE', API_BASE); alert('Saved API base: '+API_BASE); };
 $('testApi').onclick = async ()=>{
-  try{
-    const res = await fetch(API_BASE + '/health', {mode:'cors'});
-    const j = await res.json();
-    alert('Backend OK: ' + JSON.stringify(j));
-  }catch(e){
-    alert('Cannot reach backend at ' + API_BASE + ' — check IP/port or firewall.');
-  }
+  try{ const j = await (await fetch(API_BASE+'/health')).json(); alert('Backend OK: '+JSON.stringify(j)); }
+  catch(e){ alert('Cannot reach backend at '+API_BASE); }
 };
 
 async function api(path, method='GET', body=null){
-  const headers = {'Content-Type':'application/json'};
-  if(token) headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(API_BASE + path, {method, headers, body: body?JSON.stringify(body):undefined, mode:'cors'});
-  if(!res.ok){
-    let msg = '';
-    try { msg = (await res.json()).error || await res.text(); } catch(_){ msg = res.status + ' ' + res.statusText; }
-    throw new Error(msg || (res.status + ' ' + res.statusText));
-  }
+  const headers={'Content-Type':'application/json'}; if(token) headers['Authorization']='Bearer '+token;
+  const res=await fetch(API_BASE+path,{method, headers, body: body?JSON.stringify(body):undefined});
+  if(!res.ok){ let msg=''; try{ msg=(await res.json()).error || await res.text(); }catch(_){ msg=res.status+' '+res.statusText; } throw new Error(msg); }
   return res.json();
 }
 
-// ====== Auth ======
+// Auth
 $('btnRegister').onclick = async ()=>{
-  try {
-    const j = await api('/auth/register','POST',{username:$('username').value, password:$('password').value});
-    token = j.access_token; localStorage.setItem('ACCESS', token);
-    me = j.user; $('myCode').value = me.code; setWho(); connectSocket();
-  } catch(e){ warn('register: '+e.message); }
+  try{ const j=await api('/auth/register','POST',{username:$('username').value, password:$('password').value});
+    token=j.access_token; localStorage.setItem('ACCESS', token); me=j.user; $('myCode').value=me.code; setWho(); connectSocket();
+  }catch(e){ warn('register: '+e.message); }
 };
-
 $('btnLogin').onclick = async ()=>{
-  try {
-    const j = await api('/auth/login','POST',{username:$('username').value, password:$('password').value});
-    token = j.access_token; localStorage.setItem('ACCESS', token);
-    me = j.user; $('myCode').value = me.code; setWho(); connectSocket();
-  } catch(e){ warn('login: '+e.message); }
+  try{ const j=await api('/auth/login','POST',{username:$('username').value, password:$('password').value});
+    token=j.access_token; localStorage.setItem('ACCESS', token); me=j.user; $('myCode').value=me.code; setWho(); connectSocket();
+  }catch(e){ warn('login: '+e.message); }
 };
-
 $('btnLogout').onclick = ()=>{
-  token = null; localStorage.removeItem('ACCESS');
-  me=null; setWho(); if(socket){ socket.disconnect(); socket=null; }
-  $('roomPill').textContent='room: -'; $('chat').innerHTML='';
+  token=null; localStorage.removeItem('ACCESS'); me=null; setWho();
+  if(socket){ socket.disconnect(); socket=null; } $('roomPill').textContent='room: -'; $('chat').innerHTML='';
 };
-
 $('btnRegen').onclick = async ()=>{
-  try {
-    const j = await api('/id','POST',{action:'regenerate_code'});
-    me.code = j.code; $('myCode').value = me.code; setWho();
-  } catch(e){ warn(e.message); }
+  if(!token) return warn('login first');
+  try{ const j=await api('/id','POST',{action:'regenerate_code'}); me.code=j.code; $('myCode').value=me.code; setWho(); }
+  catch(e){ warn(e.message); }
 };
 
+// Search & Pair
 $('btnSearch').onclick = async ()=>{
+  if(!token) return warn('login first');
   try{
-    const q = $('search').value.trim();
-    const j = await api('/search?q='+encodeURIComponent(q));
-    const box = $('results'); box.innerHTML='';
-    j.results.forEach(u=>{
-      const btn = document.createElement('button');
-      btn.textContent = `Pair with ${u.username} (${u.code})`;
-      btn.onclick = ()=> pairWithCode(u.code);
-      box.appendChild(btn);
-      box.appendChild(document.createElement('br'));
-    });
-    if(!j.results.length) box.textContent = 'No results';
+    const q=$('search').value.trim(); const j=await api('/search?q='+encodeURIComponent(q));
+    const box=$('results'); box.innerHTML='';
+    j.results.forEach(u=>{ const b=document.createElement('button'); b.textContent=`Pair with ${u.username} (${u.code})`; b.onclick=()=>pairWithCode(u.code); box.appendChild(b); box.appendChild(document.createElement('br')); });
+    if(!j.results.length) box.textContent='No results';
   }catch(e){ warn(e.message); }
 };
 
-// ====== Socket, Pairing, Chat ======
+// Socket
 function connectSocket(){
   if(!token) return warn('login first');
   if(socket){ socket.disconnect(); }
-
-  socket = io(API_BASE, {
-    transports: ['websocket'],
-    auth: { token },
-    path: '/socket.io', // explicit path for proxies/reverse proxies
-    reconnection: true,
-    reconnectionAttempts: 5,
-    reconnectionDelay: 500
+  const url = API_BASE + `?token=${encodeURIComponent(token)}`;
+  socket = io(url, {
+    transports:['websocket'],
+    auth:{ token }, path:'/socket.io',
+    reconnection:true, reconnectionAttempts:5, reconnectionDelay:500
   });
 
-  socket.on('connect', ()=> console.log('socket connected'));
-  socket.on('connected', (j)=> console.log('server ack', j));
-  socket.on('connect_error', (err)=> warn('socket error: '+ (err?.message || err)));
+  socket.on('connect', ()=>console.log('socket connected'));
+  socket.on('connected', (j)=>console.log('server ack', j));
+  socket.on('connect_error', (err)=>warn('socket error: '+(err?.message||err)));
 
-  // When either side is paired, server now emits 'paired' to BOTH
   socket.on('paired', async (j)=>{
-    room = j.room; $('roomPill').textContent='room: '+room;
-    socket.emit('join_room', {room});
-    // load message history
-    try{
-      const msgs = await api('/messages/'+room, 'GET');
-      $('chat').innerHTML='';
-      msgs.reverse().forEach(m=>logChat(m.sender_name, m.text));
-    }catch(_){}
+    room=j.room; $('roomPill').textContent='room: '+room;
+    socket.emit('join_room',{room});
+    try{ const msgs=await api('/messages/'+room,'GET'); $('chat').innerHTML=''; msgs.reverse().forEach(m=>logChat(m.sender_name,m.text)); }catch(_){}
   });
-
-  // Still handle incoming_pair (peer went offline/online scenarios)
-  socket.on('incoming_pair', (j)=> {
-    console.log('incoming_pair', j);
-  });
-
-  socket.on('pair_error', j=> warn(j.error));
-
-  socket.on('new_message', (m)=> logChat(m.sender_name, m.text));
-
-  // signaling
-  socket.on('rtc-offer', async ({room: rm, sdp})=>{
+  socket.on('pair_error', j=>warn(j.error));
+  socket.on('new_message', (m)=>logChat(m.sender_name, m.text));
+  socket.on('rtc-offer', async ({room:rm,sdp})=>{
     if(!pc) await createPC();
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    const ans = await pc.createAnswer();
-    await pc.setLocalDescription(ans);
-    socket.emit('rtc-answer', {room: rm, sdp: pc.localDescription});
+    const ans=await pc.createAnswer(); await pc.setLocalDescription(ans);
+    socket.emit('rtc-answer',{room:rm,sdp:pc.localDescription});
   });
-  socket.on('rtc-answer', async ({sdp})=>{
-    if(pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-  });
-  socket.on('rtc-ice', async ({candidate})=>{
-    if(pc && candidate) { try{ await pc.addIceCandidate(candidate); }catch(e){ console.warn(e); } }
-  });
-
-  socket.on('voice_variant', (j)=> console.log('peer voice variant set', j));
+  socket.on('rtc-answer', async ({sdp})=>{ if(pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp)); });
+  socket.on('rtc-ice', async ({candidate})=>{ if(pc && candidate){ try{ await pc.addIceCandidate(candidate); }catch(e){ console.warn(e); } } });
+  socket.on('voice_variant', (j)=>console.log('peer voice variant set', j));
 }
 
 async function pairWithCode(code){
   if(!socket) return warn('login first');
-  socket.emit('pair_with_code', {peer_code: code});
+  socket.emit('pair_with_code',{peer_code:code});
 }
 
+// Chat
 $('sendMsg').onclick = ()=>{
   if(!room) return warn('pair first');
-  const text = $('chatInput').value.trim(); if(!text) return;
-  socket.emit('send_message', {room, text});
-  $('chatInput').value='';
+  const text=$('chatInput').value.trim(); if(!text) return;
+  socket.emit('send_message',{room,text}); $('chatInput').value='';
 };
 
-// ====== Voice presets ======
-$('voiceSelect').onchange = ()=>{
-  voicePreset = $('voiceSelect').value;
-  $('customBox').style.display = (voicePreset==='custom') ? 'block' : 'none';
-};
+// Voice UI
+$('voiceSelect').onchange=()=>{ voicePreset=$('voiceSelect').value; $('customBox').style.display=(voicePreset==='custom')?'block':'none'; };
 $('btnSetVoice').onclick = ()=>{
   if(!room) return warn('pair first');
-  const custom = voicePreset==='custom' ? {brightness: parseFloat($('brightness').value), wet: parseFloat($('wet').value)} : null;
-  socket.emit('set_voice_variant', {room, variant: voicePreset, custom});
+  const custom=voicePreset==='custom'?{brightness:parseFloat($('brightness').value),wet:parseFloat($('wet').value)}:null;
+  socket.emit('set_voice_variant',{room,variant:voicePreset,custom});
   if(localStream) applyVoice(localStream, voicePreset, custom);
 };
 
-// ====== Calls (WebRTC) ======
+// WebRTC
 $('btnCall').onclick = async ()=>{ if(!room) return warn('pair first'); await startCall(); };
 $('btnHang').onclick = async ()=>{ await endCall(); };
 
 async function ensureMedia(){
   if(localStream) return;
-  // Desktop allows http://127.0.0.1; mobile requires HTTPS
-  localStream = await navigator.mediaDevices.getUserMedia({audio:true, video:true});
-  $('me').srcObject = localStream;
-  await applyVoice(localStream, voicePreset, voicePreset==='custom'?{brightness:parseFloat($('brightness').value), wet:parseFloat($('wet').value)}:null);
+  localStream=await navigator.mediaDevices.getUserMedia({audio:true, video:true});
+  $('me').srcObject=localStream;
+  await applyVoice(localStream, voicePreset, voicePreset==='custom'?{brightness:parseFloat($('brightness').value),wet:parseFloat($('wet').value)}:null);
 }
-
 async function createPC(){
-  pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
-  pc.onicecandidate = (e)=>{ if(e.candidate) socket.emit('rtc-ice', {room, candidate:e.candidate}); };
-  pc.ontrack = (e)=>{ $('peer').srcObject = e.streams[0]; };
-
-  // Add tracks
-  const audioTrack = processedTrack || (localStream && localStream.getAudioTracks()[0]);
-  if(audioTrack) pc.addTrack(audioTrack, new MediaStream([audioTrack]));
-  const vtrack = localStream && localStream.getVideoTracks()[0];
-  if(vtrack) pc.addTrack(vtrack, new MediaStream([vtrack]));
+  pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+  pc.onicecandidate=(e)=>{ if(e.candidate) socket.emit('rtc-ice',{room,candidate:e.candidate}); };
+  pc.ontrack=(e)=>{ $('peer').srcObject=e.streams[0]; };
+  const at=processedTrack || (localStream && localStream.getAudioTracks()[0]); if(at) pc.addTrack(at, new MediaStream([at]));
+  const vt=localStream && localStream.getVideoTracks()[0]; if(vt) pc.addTrack(vt, new MediaStream([vt]));
 }
-
 async function startCall(){
-  await ensureMedia();
-  await createPC();
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  socket.emit('rtc-offer', {room, sdp: pc.localDescription});
+  await ensureMedia(); await createPC();
+  const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+  socket.emit('rtc-offer',{room,sdp:pc.localDescription});
 }
-
 async function endCall(){
-  if(pc){
-    pc.getSenders().forEach(s=>s.track && s.track.stop());
-    pc.close(); pc=null;
-  }
+  if(pc){ pc.getSenders().forEach(s=>s.track && s.track.stop()); pc.close(); pc=null; }
   if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
   if(ctx){ ctx.close(); ctx=null; }
   $('me').srcObject=null; $('peer').srcObject=null;
 }
 
-// ====== Web Audio lightweight voice FX ======
+// Voice FX (lightweight)
 async function applyVoice(stream, preset, custom){
-  if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-  try{ if(srcNode) srcNode.disconnect(); }catch(_){}
-  try{ if(dryGain) dryGain.disconnect(); }catch(_){}
-
-  srcNode = ctx.createMediaStreamSource(stream);
-  destNode = ctx.createMediaStreamDestination();
-  dryGain = ctx.createGain(); dryGain.gain.value = 0.6;
-  const wetGain = ctx.createGain(); wetGain.gain.value = (custom?.wet ?? 0.4);
-
-  const hp = ctx.createBiquadFilter(); hp.type='highpass';
-  const presence = ctx.createBiquadFilter(); presence.type='peaking';
-
-  const delay = ctx.createDelay(); delay.delayTime.value = 0.012;
-  const lfo = ctx.createOscillator(); lfo.frequency.value = 6.0;
-  const lfoGain = ctx.createGain(); lfoGain.gain.value = 0.004;
-  lfo.connect(lfoGain).connect(delay.delayTime);
-  lfo.start();
-
-  const shaper = ctx.createWaveShaper();
-  shaper.curve = makeCurve(0.6);
-
-  const shelf = ctx.createBiquadFilter(); shelf.type='peaking'; shelf.frequency.value=4500; shelf.gain.value=3;
-
-  function setPreset(p){
+  if(!ctx) ctx=new (window.AudioContext||window.webkitAudioContext)();
+  try{ if(srcNode) srcNode.disconnect(); if(dryGain) dryGain.disconnect(); }catch(_){}
+  srcNode=ctx.createMediaStreamSource(stream); destNode=ctx.createMediaStreamDestination();
+  dryGain=ctx.createGain(); dryGain.gain.value=0.6; const wetGain=ctx.createGain(); wetGain.gain.value=(custom?.wet ?? 0.4);
+  const hp=ctx.createBiquadFilter(); hp.type='highpass';
+  const presence=ctx.createBiquadFilter(); presence.type='peaking';
+  const delay=ctx.createDelay(); delay.delayTime.value=0.012; const lfo=ctx.createOscillator(); lfo.frequency.value=6.0; const lfoGain=ctx.createGain(); lfoGain.gain.value=0.004; lfo.connect(lfoGain).connect(delay.delayTime); lfo.start();
+  const shaper=ctx.createWaveShaper(); shaper.curve=makeCurve(0.6);
+  const shelf=ctx.createBiquadFilter(); shelf.type='peaking'; shelf.frequency.value=4500; shelf.gain.value=3;
+  (function setPreset(p){
     if(p==='woman'){ hp.frequency.value=160; presence.frequency.value=3000; presence.gain.value=6; presence.Q.value=1.0; wetGain.gain.value=0.45; }
     else if(p==='girl'){ hp.frequency.value=220; presence.frequency.value=3300; presence.gain.value=8; presence.Q.value=1.2; wetGain.gain.value=0.5; }
     else if(p==='lady'){ hp.frequency.value=180; presence.frequency.value=2800; presence.gain.value=5; presence.Q.value=0.9; wetGain.gain.value=0.4; }
-    else {
-      const b = custom?.brightness ?? 1.2; const w = custom?.wet ?? 0.4;
-      hp.frequency.value = 120 + 170*b;
-      presence.frequency.value = 2600*b;
-      presence.gain.value = 5*b;
-      presence.Q.value = 0.9;
-      wetGain.gain.value = w;
-      return;
-    }
-  }
-  setPreset(preset);
-
-  srcNode.connect(dryGain);
-  srcNode.connect(hp); hp.connect(presence); presence.connect(delay); delay.connect(shaper); shaper.connect(shelf); shelf.connect(wetGain);
-
-  const sum = ctx.createGain();
-  dryGain.connect(sum); wetGain.connect(sum);
-  sum.connect(destNode);
-
-  const newTrack = destNode.stream.getAudioTracks()[0];
-  processedTrack = newTrack;
-  $('me').srcObject = new MediaStream([newTrack, ...(stream.getVideoTracks().length? [stream.getVideoTracks()[0]]:[])]);
-  if(pc){
-    const sender = pc.getSenders().find(s=>s.track && s.track.kind==='audio');
-    if(sender) sender.replaceTrack(newTrack);
-  }
-
-  function makeCurve(amount){
-    const n=256, curve=new Float32Array(n); const k=typeof amount==='number'?amount:0.5;
-    for(let i=0;i<n;i++){ let x=i*2/n-1; curve[i]=(1+k)*x/(1+k*Math.abs(x)); }
-    return curve;
-  }
+    else { const b=custom?.brightness ?? 1.2, w=custom?.wet ?? 0.4; hp.frequency.value=120+170*b; presence.frequency.value=2600*b; presence.gain.value=5*b; presence.Q.value=0.9; wetGain.gain.value=w; }
+  })(preset);
+  srcNode.connect(dryGain); srcNode.connect(hp); hp.connect(presence); presence.connect(delay); delay.connect(shaper); shaper.connect(shelf); shelf.connect(wetGain);
+  const sum=ctx.createGain(); dryGain.connect(sum); wetGain.connect(sum); sum.connect(destNode);
+  const newTrack=destNode.stream.getAudioTracks()[0]; processedTrack=newTrack;
+  $('me').srcObject=new MediaStream([newTrack, ...(stream.getVideoTracks().length?[stream.getVideoTracks()[0]]:[])]);
+  if(pc){ const s=pc.getSenders().find(s=>s.track && s.track.kind==='audio'); if(s) s.replaceTrack(newTrack); }
+  function makeCurve(kv){ const n=256, curve=new Float32Array(n), k=typeof kv==='number'?kv:0.5; for(let i=0;i<n;i++){ let x=i*2/n-1; curve[i]=(1+k)*x/(1+k*Math.abs(x)); } return curve; }
 }
 
-// ====== Restore token & connect on reload ======
+// Bootstrap
 (async function bootstrap(){
   try{
-    const saved = localStorage.getItem('ACCESS');
-    if(saved){
-      token = saved;
-      const meResp = await api('/auth/me', 'GET');
-      me = meResp; $('myCode').value = me.code; setWho(); connectSocket();
-    }
-  }catch(e){
-    console.log('bootstrap auth fail', e);
-    token = null; localStorage.removeItem('ACCESS'); setWho();
-  }
+    const saved=localStorage.getItem('ACCESS'); if(saved){ token=saved; const meResp=await api('/auth/me'); me=meResp; $('myCode').value=me.code; setWho(); connectSocket(); }
+  }catch(e){ console.log('bootstrap auth fail', e); token=null; localStorage.removeItem('ACCESS'); setWho(); }
 })();
 </script>
 </body>
