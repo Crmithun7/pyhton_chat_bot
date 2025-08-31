@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import os, secrets, hashlib
-from flask import Flask, request, render_template
+from pathlib import Path
+from flask import Flask, request, render_template, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
     JWTManager, create_access_token, create_refresh_token,
@@ -15,7 +16,7 @@ from sqlalchemy import func
 print(">>> Starting backend in THREADING mode (eventlet disabled).")
 
 # ---------------- Config ----------------
-FOL_DER="client"
+
 class Config:
     SECRET_KEY = os.getenv("FLASK_SECRET", "dev-secret")
     JWT_SECRET_KEY = os.getenv("JWT_SECRET", "change-this-in-prod")
@@ -24,12 +25,21 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {"connect_args": {"check_same_thread": False}}
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
-    
+
+    # Frontend root (can override with env var CLIENT_DIR)
+    CLIENT_DIR = os.getenv(
+        "CLIENT_DIR",
+        r"C:\Users\crmit\Desktop\python_chat_bot\client"
+    )
 
 # ------------- App / DB / JWT / SIO -------------
 app = Flask(__name__)
 app.config.from_object(Config)
 CORS(app, origins=Config.CORS_ORIGINS, supports_credentials=True)
+
+# Serve frontend from CLIENT_DIR at site root
+app.static_folder = app.config["CLIENT_DIR"]
+app.static_url_path = ""  # so /main.js maps to <CLIENT_DIR>/main.js
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
@@ -194,6 +204,39 @@ def get_messages(room):
 def health():
     return {"ok": True}
 
+# ---------- Static / SPA routes (keep after API routes) ----------
+@app.get("/")
+def serve_index():
+    root = Path(app.static_folder).resolve()
+    index = root / "index.html"
+    if index.exists():
+        return send_from_directory(root, "index.html")
+    return {"error": f"index.html not found in {root}"}, 404
+
+@app.get("/<path:filename>")
+def serve_static_or_spa(filename: str):
+    """
+    If the requested file exists under CLIENT_DIR, serve it.
+    Otherwise, fall back to index.html so client-side routing works.
+    This route is placed after API routes to avoid intercepting them.
+    """
+    root = Path(app.static_folder).resolve()
+    target = (root / filename).resolve()
+
+    # prevent path traversal outside root
+    if not str(target).startswith(str(root)):
+        return {"error": "forbidden"}, 403
+
+    if target.is_file():
+        # Serve actual asset
+        return send_from_directory(root, filename)
+
+    # Fallback to SPA index.html
+    index = root / "index.html"
+    if index.exists():
+        return send_from_directory(root, "index.html")
+
+    return {"error": "not found"}, 404
 
 # --------------- Socket.IO (threading) ---------------
 @sio.on("connect")
@@ -298,12 +341,6 @@ def set_voice_variant(data):
     log = CallLog(room=rm, caller_id=sess["uid"], voice_variant=variant)
     db.session.add(log); db.session.commit()
     emit("voice_variant", {"room": rm, "from": sess["username"], "variant": variant, "custom": custom}, room=rm)
-
-
-@app.route('./')
-def index():
-    return render_template(FOL_DER,'index.html')
-
 
 # --------------- Main ---------------
 if __name__ == "__main__":
