@@ -14,3 +14,6 @@ gunicorn==22.0.0
 flask-jwt-extended==4.6.0
 flask-cors==4.0.0
 sqlalchemy==2.0.32
+gunicorn>=21.2
+gevent>=24.2.1
+gevent-websocket>=0.10.1
