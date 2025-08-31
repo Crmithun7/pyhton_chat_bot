@@ -329,4 +329,13 @@ def rtc_ice(data):
 # ------------ Main ------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    sio.run(app, host="0.0.0.0", port=port)
+    # Allow Werkzeug only when explicitly enabled (e.g., on Render)
+    run_kwargs = {}
+    if os.getenv("ALLOW_UNSAFE_WERKZEUG", "0") == "1":
+        run_kwargs["allow_unsafe_werkzeug"] = True
+
+    # Turn on websocket upgrades in real deployments if you want WS (not just polling)
+    if os.getenv("ALLOW_WS", "0") == "1":
+        sio.server.eio.allow_upgrades = True  # safe to toggle before run
+
+    sio.run(app, host="0.0.0.0", port=port, **run_kwargs)
