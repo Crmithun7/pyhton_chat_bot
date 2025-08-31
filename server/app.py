@@ -194,9 +194,6 @@ def get_messages(room):
 def health():
     return {"ok": True}
 
-@app.route('/')
-def index():
-    return render_template(FOL_DER,'index.html')
 
 # --------------- Socket.IO (threading) ---------------
 @sio.on("connect")
@@ -303,6 +300,9 @@ def set_voice_variant(data):
     emit("voice_variant", {"room": rm, "from": sess["username"], "variant": variant, "custom": custom}, room=rm)
 
 
+@app.route('./')
+def index():
+    return render_template(FOL_DER,'index.html')
 
 
 # --------------- Main ---------------
