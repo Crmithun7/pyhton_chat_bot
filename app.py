@@ -1,7 +1,8 @@
+# app.py
 from datetime import datetime, timedelta
 import os, secrets, hashlib
 from pathlib import Path
-from flask import Flask, request, render_template, send_from_directory
+from flask import Flask, request, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
     JWTManager, create_access_token, create_refresh_token,
@@ -16,6 +17,10 @@ from sqlalchemy import func
 print(">>> Starting backend in THREADING mode (eventlet disabled).")
 
 # ---------------- Config ----------------
+def _parse_origins(s: str):
+    if not s or s.strip() == "*":
+        return "*"
+    return [o.strip() for o in s.split(",") if o.strip()]
 
 class Config:
     SECRET_KEY = os.getenv("FLASK_SECRET", "dev-secret")
@@ -24,13 +29,9 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///app.db")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {"connect_args": {"check_same_thread": False}}
-    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
-
-    # Frontend root (can override with env var CLIENT_DIR)
-    CLIENT_DIR = os.getenv(
-        "CLIENT_DIR",
-        r"C:\Users\crmit\Desktop\python_chat_bot\client"
-    )
+    CORS_ORIGINS = _parse_origins(os.getenv("CORS_ORIGINS", "*"))
+    # Serve frontend from this folder
+    CLIENT_DIR = os.getenv("CLIENT_DIR", str(Path(__file__).parent / "client"))
 
 # ------------- App / DB / JWT / SIO -------------
 app = Flask(__name__)
@@ -39,7 +40,7 @@ CORS(app, origins=Config.CORS_ORIGINS, supports_credentials=True)
 
 # Serve frontend from CLIENT_DIR at site root
 app.static_folder = app.config["CLIENT_DIR"]
-app.static_url_path = ""  # so /main.js maps to <CLIENT_DIR>/main.js
+app.static_url_path = ""
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
@@ -87,6 +88,7 @@ with app.app_context():
 
 # ----------------- Helpers -----------------
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
 def gen_code():
     while True:
         code = "".join(secrets.choice(_ALPHABET) for _ in range(6))
@@ -204,7 +206,7 @@ def get_messages(room):
 def health():
     return {"ok": True}
 
-# ---------- Static / SPA routes (keep after API routes) ----------
+# ---------- Static / SPA routes ----------
 @app.get("/")
 def serve_index():
     root = Path(app.static_folder).resolve()
@@ -215,27 +217,15 @@ def serve_index():
 
 @app.get("/<path:filename>")
 def serve_static_or_spa(filename: str):
-    """
-    If the requested file exists under CLIENT_DIR, serve it.
-    Otherwise, fall back to index.html so client-side routing works.
-    This route is placed after API routes to avoid intercepting them.
-    """
     root = Path(app.static_folder).resolve()
     target = (root / filename).resolve()
-
-    # prevent path traversal outside root
     if not str(target).startswith(str(root)):
         return {"error": "forbidden"}, 403
-
     if target.is_file():
-        # Serve actual asset
         return send_from_directory(root, filename)
-
-    # Fallback to SPA index.html
     index = root / "index.html"
     if index.exists():
         return send_from_directory(root, "index.html")
-
     return {"error": "not found"}, 404
 
 # --------------- Socket.IO (threading) ---------------
@@ -247,15 +237,23 @@ def on_connect(auth):
     if not token:
         token = request.args.get("token")
     if not token:
+        print("SIO connect blocked: missing token")
         return False
     payload = _decode_jwt(token)
     if not payload:
+        print("SIO connect blocked: bad token")
         return False
-    uid = int(payload.get("sub"))
+    try:
+        uid = int(payload.get("sub"))
+    except Exception:
+        print("SIO connect blocked: invalid sub")
+        return False
     username = payload.get("username")
     USER_SIDS[uid] = request.sid
     SID_USERS[request.sid] = uid
     sio.save_session(request.sid, {"uid": uid, "username": username})
+    # Optional: notify client it's OK
+    emit("connected", {"uid": uid, "username": username})
 
 @sio.on("disconnect")
 def on_disconnect():
@@ -274,19 +272,36 @@ def on_leave_room(data):
     room = (data or {}).get("room")
     if room: leave_room(room)
 
-def _pair_room(me_id, peer):
+def _emit_paired_to_sid(sid, rm, peer_payload):
+    # send 'paired' to a specific socket id
+    sio.emit("paired", {"room": rm, "peer": peer_payload}, to=sid)
+
+def _pair_room(me_id, me_sid, peer):
     rm = room_for(me_id, peer.id)
+    # current user joins
     join_room(rm)
-    emit("paired", {"room": rm, "peer": {"id": peer.id, "username": peer.username, "code": peer.code}})
+    # peer (if online) joins too
     peer_sid = USER_SIDS.get(peer.id)
     if peer_sid:
-        sess = sio.get_session(request.sid)
-        sio.emit("incoming_pair", {"room": rm, "from": {"id": me_id, "username": sess["username"]}}, to=peer_sid)
+        join_room(rm, sid=peer_sid)
+
+    me_payload   = {"id": me_id, "username": sio.get_session(me_sid)["username"]}
+    peer_payload = {"id": peer.id, "username": peer.username, "code": peer.code}
+
+    # notify both sides with 'paired'
+    _emit_paired_to_sid(me_sid, rm, peer_payload)
+    if peer_sid:
+        _emit_paired_to_sid(peer_sid, rm, me_payload)
+    else:
+        # Peer offline: still useful to tell initiator it's paired room
+        emit("incoming_pair", {"room": rm, "from": me_payload})
 
 @sio.on("pair_with_code")
 def on_pair_with_code(data):
     sess = sio.get_session(request.sid)
-    if not sess: return
+    if not sess:
+        emit("pair_error", {"error": "not authorized"})
+        return
     me_id = sess["uid"]
     code = ((data or {}).get("peer_code") or "").strip().upper()
     peer = User.query.filter_by(code=code).first()
@@ -294,7 +309,7 @@ def on_pair_with_code(data):
         emit("pair_error", {"error": "peer not found"}); return
     if peer.id == me_id:
         emit("pair_error", {"error": "cannot pair with yourself"}); return
-    _pair_room(me_id, peer)
+    _pair_room(me_id, request.sid, peer)
 
 @sio.on("send_message")
 def on_send_message(data):
@@ -345,5 +360,5 @@ def set_voice_variant(data):
 # --------------- Main ---------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
+    # Serve frontend + API + Socket.IO on same origin
     sio.run(app, host="0.0.0.0", port=port)
-    

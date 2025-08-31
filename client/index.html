@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
 <head>
@@ -8,7 +7,7 @@
   <style>
     :root { --bg:#0b1020; --panel:#121935; --border:#25305c; --muted:#a7b6ff; --text:#eaf1ff; }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background: var(--bg); color: var(--text); }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background: var(--bg); color:var(--text); }
     header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; background: var(--panel); border-bottom:1px solid var(--border); position: sticky; top: 0; z-index: 10; }
     h1 { margin: 0; font-size: 18px; }
     .pill { border:1px solid var(--border); border-radius:999px; padding:4px 10px; font-size:12px; color:var(--muted); }
@@ -47,8 +46,8 @@
           <button id="testApi">Test</button>
         </div>
         <small>
-          By default this page auto-detects your backend as <code>http://[this-host]:5000</code>.<br/>
-          Example: if you open this page at <code>http://127.0.0.1:5500</code>, it will use <code>http://127.0.0.1:5000</code>.
+          If this page is served by Flask (port 5000), it uses the same origin automatically.<br/>
+          Otherwise it defaults to <code>http://[this-host]:5000</code>.
         </small>
 
         <hr/>
@@ -120,14 +119,16 @@
   </main>
 
   <footer>
-    <small>If camera/mic fail, serve this page over HTTP: <code>python -m http.server 5500</code> and open <code>http://127.0.0.1:5500</code>. On mobile, use HTTPS.</small>
+    <small>If camera/mic fail, on desktop you can use HTTP localhost. On mobile, use HTTPS.</small>
   </footer>
 
 <script>
-// ====== Auto-detect backend base ======
+// ====== Auto-detect backend base (prefer same-origin) ======
 function guessApiBase(){
+  // If this page is served by Flask on port 5000, use same-origin
+  if (location.port === '5000') return location.origin;
   let host = location.hostname || '127.0.0.1';
-  if(host === 'localhost') host = '127.0.0.1';
+  if (host === 'localhost') host = '127.0.0.1';
   const proto = location.protocol.startsWith('https') ? 'https' : 'http';
   return `${proto}://${host}:5000`;
 }
@@ -166,7 +167,8 @@ async function api(path, method='GET', body=null){
   if(token) headers['Authorization'] = 'Bearer ' + token;
   const res = await fetch(API_BASE + path, {method, headers, body: body?JSON.stringify(body):undefined, mode:'cors'});
   if(!res.ok){
-    let msg = await res.text();
+    let msg = '';
+    try { msg = (await res.json()).error || await res.text(); } catch(_){ msg = res.status + ' ' + res.statusText; }
     throw new Error(msg || (res.status + ' ' + res.statusText));
   }
   return res.json();
@@ -178,7 +180,7 @@ $('btnRegister').onclick = async ()=>{
     const j = await api('/auth/register','POST',{username:$('username').value, password:$('password').value});
     token = j.access_token; localStorage.setItem('ACCESS', token);
     me = j.user; $('myCode').value = me.code; setWho(); connectSocket();
-  } catch(e){ warn('register: '+e); }
+  } catch(e){ warn('register: '+e.message); }
 };
 
 $('btnLogin').onclick = async ()=>{
@@ -186,7 +188,7 @@ $('btnLogin').onclick = async ()=>{
     const j = await api('/auth/login','POST',{username:$('username').value, password:$('password').value});
     token = j.access_token; localStorage.setItem('ACCESS', token);
     me = j.user; $('myCode').value = me.code; setWho(); connectSocket();
-  } catch(e){ warn('login: '+e); }
+  } catch(e){ warn('login: '+e.message); }
 };
 
 $('btnLogout').onclick = ()=>{
@@ -199,7 +201,7 @@ $('btnRegen').onclick = async ()=>{
   try {
     const j = await api('/id','POST',{action:'regenerate_code'});
     me.code = j.code; $('myCode').value = me.code; setWho();
-  } catch(e){ warn(e); }
+  } catch(e){ warn(e.message); }
 };
 
 $('btnSearch').onclick = async ()=>{
@@ -215,19 +217,28 @@ $('btnSearch').onclick = async ()=>{
       box.appendChild(document.createElement('br'));
     });
     if(!j.results.length) box.textContent = 'No results';
-  }catch(e){ warn(e); }
+  }catch(e){ warn(e.message); }
 };
 
 // ====== Socket, Pairing, Chat ======
 function connectSocket(){
   if(!token) return warn('login first');
   if(socket){ socket.disconnect(); }
-  // Force websocket transport to avoid long-polling quirks on some setups
-  socket = io(API_BASE, { transports: ['websocket'], auth: { token } });
-  socket.on('connect', ()=> console.log('socket connected'));
-  socket.on('connect_error', (err)=> warn('socket error: '+err.message));
 
-  socket.on('incoming_pair', (j)=> console.log('incoming_pair', j));
+  socket = io(API_BASE, {
+    transports: ['websocket'],
+    auth: { token },
+    path: '/socket.io', // explicit path for proxies/reverse proxies
+    reconnection: true,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 500
+  });
+
+  socket.on('connect', ()=> console.log('socket connected'));
+  socket.on('connected', (j)=> console.log('server ack', j));
+  socket.on('connect_error', (err)=> warn('socket error: '+ (err?.message || err)));
+
+  // When either side is paired, server now emits 'paired' to BOTH
   socket.on('paired', async (j)=>{
     room = j.room; $('roomPill').textContent='room: '+room;
     socket.emit('join_room', {room});
@@ -238,6 +249,12 @@ function connectSocket(){
       msgs.reverse().forEach(m=>logChat(m.sender_name, m.text));
     }catch(_){}
   });
+
+  // Still handle incoming_pair (peer went offline/online scenarios)
+  socket.on('incoming_pair', (j)=> {
+    console.log('incoming_pair', j);
+  });
+
   socket.on('pair_error', j=> warn(j.error));
 
   socket.on('new_message', (m)=> logChat(m.sender_name, m.text));
@@ -290,7 +307,7 @@ $('btnHang').onclick = async ()=>{ await endCall(); };
 
 async function ensureMedia(){
   if(localStream) return;
-  // Note: on mobile HTTPS is required to get camera/mic
+  // Desktop allows http://127.0.0.1; mobile requires HTTPS
   localStream = await navigator.mediaDevices.getUserMedia({audio:true, video:true});
   $('me').srcObject = localStream;
   await applyVoice(localStream, voicePreset, voicePreset==='custom'?{brightness:parseFloat($('brightness').value), wet:parseFloat($('wet').value)}:null);
@@ -300,6 +317,8 @@ async function createPC(){
   pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
   pc.onicecandidate = (e)=>{ if(e.candidate) socket.emit('rtc-ice', {room, candidate:e.candidate}); };
   pc.ontrack = (e)=>{ $('peer').srcObject = e.streams[0]; };
+
+  // Add tracks
   const audioTrack = processedTrack || (localStream && localStream.getAudioTracks()[0]);
   if(audioTrack) pc.addTrack(audioTrack, new MediaStream([audioTrack]));
   const vtrack = localStream && localStream.getVideoTracks()[0];
@@ -315,7 +334,10 @@ async function startCall(){
 }
 
 async function endCall(){
-  if(pc){ pc.getSenders().forEach(s=>s.track && s.track.stop()); pc.close(); pc=null; }
+  if(pc){
+    pc.getSenders().forEach(s=>s.track && s.track.stop());
+    pc.close(); pc=null;
+  }
   if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
   if(ctx){ ctx.close(); ctx=null; }
   $('me').srcObject=null; $('peer').srcObject=null;
