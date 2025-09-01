@@ -1,5 +1,20 @@
-# server/app.py
-import os, secrets, hashlib
+# -------------------- eventlet FIRST (if allowed) --------------------
+import os
+USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"  # set USE_EVENTLET=0 to force threading
+
+ASYNC_MODE = "threading"
+if USE_EVENTLET:
+    try:
+        import eventlet  # type: ignore
+        eventlet.monkey_patch()  # MUST be before any other imports (Flask/SocketIO/etc.)
+        ASYNC_MODE = "eventlet"
+        print(">>> Using eventlet async mode (WebSocket upgrades enabled).")
+    except Exception as e:
+        print(">>> Eventlet unavailable or failed to monkey_patch; falling back to threading. Reason:", repr(e))
+        ASYNC_MODE = "threading"
+
+# -------------------- rest of imports (safe after monkey_patch) --------------------
+import secrets, hashlib
 from datetime import timedelta, datetime
 from pathlib import Path
 
@@ -13,11 +28,11 @@ from flask_jwt_extended import (
     JWTManager, create_access_token, create_refresh_token,
     jwt_required, get_jwt_identity
 )
-from flask_jwt_extended.utils import decode_token  # robust decode for sockets
+from flask_jwt_extended.utils import decode_token
 
 from flask_socketio import SocketIO, join_room, leave_room, emit
 
-print(">>> Starting backend in THREADING mode (WS upgrades optional via ALLOW_WS).")
+print(">>> Starting backend (async_mode =", ASYNC_MODE, ")")
 
 # ------------ Config ------------
 HERE = Path(__file__).resolve().parent
@@ -41,16 +56,15 @@ CORS(app, origins=Config.CORS_ORIGINS, supports_credentials=True)
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
-allow_ws = os.getenv("ALLOW_WS", "0") == "1"  # enable WebSocket upgrades in prod
 sio = SocketIO(
     app,
-    async_mode="threading",
+    async_mode=ASYNC_MODE,
     cors_allowed_origins=Config.CORS_ORIGINS,
     logger=False,
     engineio_logger=False,
-    allow_upgrades=allow_ws,
-    ping_interval=12,
-    ping_timeout=30,
+    allow_upgrades=True,   # allow WS when available
+    ping_interval=20,
+    ping_timeout=40,
 )
 
 # ------------ Models ------------
@@ -93,12 +107,12 @@ def room_for(a: int, b: int) -> str:
     x, y = sorted([a, b])
     return "pair-" + hashlib.sha256(f"{x}:{y}".encode()).hexdigest()[:32]
 
-USER_SIDS = {}   # uid -> sid
+USER_SIDS = {}   # uid -> current sid (best-effort)
 SID_USERS = {}   # sid -> uid
 
 def _decode_access_token(token: str):
     try:
-        claims = decode_token(token)  # uses Flask-JWT-Extended keys/options
+        claims = decode_token(token)
         sub = claims.get("sub")
         uid = int(sub) if str(sub).isdigit() else None
         return uid, claims.get("username")
@@ -122,7 +136,6 @@ def register():
              password_hash=generate_password_hash(password),
              code=gen_code())
     db.session.add(u); db.session.commit()
-    # IMPORTANT: make sub a string to avoid PyJWT "Subject must be a string"
     access = create_access_token(identity=str(u.id), additional_claims={"username": u.username})
     refresh = create_refresh_token(identity=str(u.id))
     return {"access_token": access, "refresh_token": refresh,
@@ -152,7 +165,6 @@ def refresh():
 
 @app.get("/auth/me")
 def whoami():
-    # nice UX: if missing/invalid token just say "not logged in"
     auth = request.headers.get("Authorization", "")
     token = auth.split("Bearer ", 1)[-1].strip() if "Bearer " in auth else None
     if not token:
@@ -177,9 +189,10 @@ def regen_code():
 @app.get("/search")
 @jwt_required()
 def search_users():
-    q = (request.args.get("q") or "").strip().upper()
+    q = (request.args.get("q") or "").strip()
     if not q: return {"results": []}
-    by_code = User.query.filter(User.code == q).all()
+    q_upper = q.upper()
+    by_code = User.query.filter(User.code == q_upper).all()
     by_name = (User.query.filter(func.lower(User.username).like(func.lower(f"{q}%"))).limit(10).all())
     seen, results = set(), []
     for u in by_code + by_name:
@@ -199,9 +212,27 @@ def get_messages(room):
         "created_at": m.created_at.isoformat()
     } for m in msgs]
 
+@app.get("/pair/pending")
+@jwt_required()
+def pair_pending():
+    uid = int(get_jwt_identity())
+    reqs = (PairRequest.query
+            .filter_by(to_id=uid, status="pending")
+            .order_by(PairRequest.created_at.desc())
+            .all())
+    out = []
+    for pr in reqs:
+        from_user = db.session.get(User, pr.from_id)
+        out.append({
+            "request_id": pr.id,
+            "from": {"id": pr.from_id, "username": (from_user.username if from_user else "unknown")},
+            "created_at": pr.created_at.isoformat()
+        })
+    return {"requests": out}
+
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "async_mode": ASYNC_MODE}
 
 # ------------ Static (SPA) ------------
 @app.get("/")
@@ -216,7 +247,6 @@ def serve_assets(filename):
     target = (root / filename).resolve()
     if str(target).startswith(str(root)) and target.is_file():
         return send_from_directory(root, filename)
-    # SPA fallback
     idx = root / "index.html"
     if idx.exists(): return send_from_directory(root, "index.html")
     return {"error": "not found"}, 404
@@ -232,8 +262,11 @@ def sio_connect(auth):
     uid, username = _decode_access_token(token or "")
     if not uid:
         return False  # reject
+
     USER_SIDS[uid] = request.sid
     SID_USERS[request.sid] = uid
+
+    join_room(f"user-{uid}")  # stable per-user room
     emit("whoami", {"id": uid, "username": username})
 
 @sio.on("disconnect")
@@ -243,7 +276,7 @@ def sio_disconnect():
     if uid and USER_SIDS.get(uid) == sid:
         USER_SIDS.pop(uid, None)
 
-# ---- pairing with request/accept flow ----
+# ---- Pairing ----
 @sio.on("pair_with_code")
 def sio_pair_with_code(data):
     me = SID_USERS.get(request.sid)
@@ -254,14 +287,18 @@ def sio_pair_with_code(data):
         emit("pair_error", {"error": "peer not found"}); return
     if peer.id == me:
         emit("pair_error", {"error": "cannot pair with yourself"}); return
+
     pr = PairRequest(from_id=me, to_id=peer.id, status="pending")
     db.session.add(pr); db.session.commit()
+
+    payload = {
+        "request_id": pr.id,
+        "from": {"id": me, "username": db.session.get(User, me).username}
+    }
+    emit("pair_request", payload, room=f"user-{peer.id}")
     peer_sid = USER_SIDS.get(peer.id)
     if peer_sid:
-        emit("pair_request", {
-            "request_id": pr.id,
-            "from": {"id": me, "username": User.query.get(me).username}
-        }, to=peer_sid)
+        emit("pair_request", payload, to=peer_sid)
     emit("pair_request_sent", {"request_id": pr.id})
 
 @sio.on("pair_response")
@@ -273,12 +310,15 @@ def sio_pair_response(data):
     pr = db.session.get(PairRequest, rid)
     if not pr or pr.to_id != me or pr.status != "pending":
         emit("pair_error", {"error": "invalid request"}); return
-    pr.status = "accepted" if accept else "declined"; db.session.commit()
+
+    pr.status = "accepted" if accept else "declined"
+    db.session.commit()
+
     from_sid = USER_SIDS.get(pr.from_id)
     if not accept:
         if from_sid: emit("pair_declined", {"request_id": rid}, to=from_sid)
         emit("pair_declined", {"request_id": rid}); return
-    # accepted -> tell both clients the room id
+
     rm = room_for(pr.from_id, pr.to_id)
     if from_sid: emit("paired", {"room": rm}, to=from_sid)
     emit("paired", {"room": rm})
@@ -293,7 +333,7 @@ def sio_leave(data):
     rm = (data or {}).get("room")
     if rm: leave_room(rm)
 
-# chat
+# ---- Chat ----
 @sio.on("send_message")
 def sio_send_message(data):
     uid = SID_USERS.get(request.sid)
@@ -310,7 +350,7 @@ def sio_send_message(data):
         "created_at": msg.created_at.isoformat()
     }, room=rm)
 
-# signaling
+# ---- WebRTC signaling ----
 @sio.on("rtc-offer")
 def rtc_offer(data):
     rm = (data or {}).get("room"); sdp = (data or {}).get("sdp")
@@ -329,13 +369,7 @@ def rtc_ice(data):
 # ------------ Main ------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    # Allow Werkzeug only when explicitly enabled (e.g., on Render)
     run_kwargs = {}
     if os.getenv("ALLOW_UNSAFE_WERKZEUG", "0") == "1":
         run_kwargs["allow_unsafe_werkzeug"] = True
-
-    # Turn on websocket upgrades in real deployments if you want WS (not just polling)
-    if os.getenv("ALLOW_WS", "0") == "1":
-        sio.server.eio.allow_upgrades = True  # safe to toggle before run
-
     sio.run(app, host="0.0.0.0", port=port, **run_kwargs)

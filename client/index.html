@@ -18,7 +18,6 @@ button{cursor:pointer} small{color:var(--muted)} hr{border:0;border-top:1px soli
 video{width:100%;border-radius:10px;background:#000} footer{text-align:center;color:var(--muted);padding:8px}
 @media (max-width: 900px){main{grid-template-columns:1fr}}
 </style>
-<!-- Socket.IO v4 client (compatible with Flask-SocketIO) -->
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
@@ -32,11 +31,11 @@ video{width:100%;border-radius:10px;background:#000} footer{text-align:center;co
     <div class="col">
       <h3>1) API Settings</h3>
       <div class="row">
-        <input id="apiBase" value="" style="flex:1" placeholder="https://your-domain (defaults to same-origin)"/>
+        <input id="apiBase" value="" style="flex:1" placeholder="Defaults to this origin"/>
         <button id="saveApi">Save</button>
         <button id="testApi">Test</button>
       </div>
-      <small>Defaults to this page’s origin (Flask static). If running frontend elsewhere, it guesses http://[this-host]:5000.</small>
+      <small>Serving from Flask static? Leave as-is. Otherwise set your API base.</small>
       <hr/>
       <h3>2) Register / Login</h3>
       <div class="row"><input id="username" placeholder="username"/><input id="password" type="password" placeholder="password"/></div>
@@ -70,32 +69,26 @@ video{width:100%;border-radius:10px;background:#000} footer{text-align:center;co
   </section>
 </main>
 
-<footer><small>If camera/mic fail in dev, open via: <code>python -m http.server 5500</code> → http://127.0.0.1:5500</small></footer>
+<footer><small>Tip: on phones, camera/mic usually require HTTPS (localhost is exempt).</small></footer>
 
 <script>
-/* ---------- API base wiring: same-origin first, fallback to :5000, URL ?api= override ---------- */
-function trimTrailingSlash(u){ return u.replace(/\/+$/,''); }
+/* ---------- API base ---------- */
+function trimSlash(u){ return u.replace(/\/+$/,''); }
 function defaultApiBase(){
-  const qp = new URLSearchParams(location.search);
-  const override = qp.get('api');
-  if (override) return trimTrailingSlash(override);
-
-  // Prefer same-origin when the Flask server serves this file (CLIENT_DIR static)
-  if (location.origin && location.origin.startsWith('http')) {
-    return trimTrailingSlash(location.origin);
-  }
-  // Fallback for file:// or dev static server on a different port
+  const saved = localStorage.getItem('API_BASE');
+  if (saved) return trimSlash(saved);
+  if (location.origin && location.origin.startsWith('http')) return trimSlash(location.origin);
   let host = location.hostname || '127.0.0.1';
   if (host === 'localhost') host = '127.0.0.1';
   return `http://${host}:5000`;
 }
-
-let API_BASE = trimTrailingSlash(localStorage.getItem('API_BASE') || defaultApiBase());
+let API_BASE = defaultApiBase();
 const $ = (id)=>document.getElementById(id);
 $('apiBase').value = API_BASE;
 
 let token = localStorage.getItem('ACCESS') || null;
 let me = null, socket = null, room = null, pc = null, localIn = null, localOut = null;
+const seenRequests = new Set();
 
 function setWho(){ $('who').textContent = me?.username ? `${me.username} · code ${me.code}` : 'not logged in'; }
 function logChat(who, text){ const d=document.createElement('div'); d.className='msg'; d.textContent=who+': '+text; $('chat').appendChild(d); $('chat').scrollTop=$('chat').scrollHeight; }
@@ -104,21 +97,20 @@ function warn(t){ alert(typeof t==='string'?t:(t?.message||'Error')); console.wa
 async function api(path, method='GET', body=null){
   const headers = {'Content-Type':'application/json'};
   if(token) headers['Authorization'] = 'Bearer '+token;
-  const res = await fetch(API_BASE + path, {method, headers, body: body?JSON.stringify(body):undefined, credentials:'include'});
+  const res = await fetch(API_BASE + path, {method, headers, body: body?JSON.stringify(body):undefined});
   if(!res.ok){
     if(res.status===401 || res.status===422){ throw new Error('not authorized'); }
     const msg = await res.text(); throw new Error(msg || (res.status+' '+res.statusText));
   }
-  // health returns {"ok": true}, other endpoints return JSON bodies
   return res.json();
 }
 
 /* ---------- Settings ---------- */
 $('saveApi').onclick = ()=>{
-  API_BASE = trimTrailingSlash($('apiBase').value.trim());
+  API_BASE = trimSlash(($('apiBase').value || '').trim() || defaultApiBase());
   localStorage.setItem('API_BASE', API_BASE);
   alert('Saved API base: ' + API_BASE);
-  if (socket) { socket.disconnect(); socket = null; }
+  if (socket) { socket.disconnect(); socket=null; }
   if (token) connectSocket();
 };
 $('testApi').onclick = async ()=>{
@@ -162,24 +154,51 @@ $('btnSearch').onclick = async ()=>{
   }catch(e){ warn(e); }
 };
 
-/* ---------- Socket.IO (wired to Flask-SocketIO at same origin) ---------- */
+/* ---------- Pending pair fallback ---------- */
+async function checkPendingPairRequests() {
+  try {
+    const resp = await api('/pair/pending', 'GET');
+    (resp.requests || []).forEach((r) => {
+      if (seenRequests.has(r.request_id)) return;
+      seenRequests.add(r.request_id);
+      const ok = confirm(`Accept pair request from ${r.from.username}?`);
+      if (socket && r.request_id) {
+        socket.emit('pair_response', { request_id: r.request_id, accept: !!ok });
+      }
+    });
+  } catch (_) {}
+}
+
+/* ---------- Socket.IO (prefer WebSocket, fallback to polling automatically) ---------- */
 function connectSocket(){
   if(!token) return warn('login first');
   if(socket){ socket.disconnect(); }
 
-  // Use same origin/path as Flask (serves at /socket.io by default)
+  // NOTE: we don't force 'transports' — client will try websocket then fall back to polling
   socket = io(API_BASE, {
     path: '/socket.io',
-    transports: ['polling'],      // polling works everywhere; upgrade if ALLOW_WS=1
-    auth: { token }
+    auth: { token },
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 300,
+    reconnectionDelayMax: 2000,
+    timeout: 10000
   });
 
-  socket.on('connect', ()=> console.log('socket connected'));
+  socket.on('connect', ()=>{
+    console.log('socket connected', socket.id);
+    checkPendingPairRequests();
+  });
+  socket.on('disconnect', (reason)=> console.log('socket disconnected:', reason));
+  socket.on('connect_error', (err)=> console.warn('socket connect_error:', err?.message||err));
+
   socket.on('whoami', ()=> console.log('socket authed'));
   socket.on('pair_request_sent', ()=> alert('Pair request sent'));
   socket.on('pair_error', j=> warn(j?.error||'pair error'));
 
   socket.on('pair_request', (j)=>{
+    if (seenRequests.has(j.request_id)) return;
+    seenRequests.add(j.request_id);
     const ok = confirm(`Accept pair request from ${j.from.username}?`);
     socket.emit('pair_response', {request_id: j.request_id, accept: ok});
   });
@@ -205,9 +224,11 @@ function connectSocket(){
   });
   socket.on('rtc-answer', async ({sdp})=>{ if(pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp)); });
   socket.on('rtc-ice', async ({candidate})=>{ try{ if(pc && candidate) await pc.addIceCandidate(candidate); }catch(e){ console.warn(e); } });
+
+  window.addEventListener('beforeunload', ()=>{ try{ socket.close(); }catch{} });
 }
 
-/* ---------- Chat send ---------- */
+/* ---------- Chat ---------- */
 $('sendMsg').onclick = ()=>{
   if(!room) return warn('pair first');
   const text = $('chatInput').value.trim(); if(!text) return;
@@ -220,6 +241,7 @@ $('btnHang').onclick = async ()=>{ await endCall(); };
 
 async function ensureMedia(){
   if(localIn) return;
+  // NOTE: Most mobile browsers require HTTPS for camera/mic (localhost is exempt)
   localIn = await navigator.mediaDevices.getUserMedia({audio:true, video:true});
   $('me').srcObject = localIn;
 }
