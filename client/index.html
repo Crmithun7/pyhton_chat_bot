@@ -18,6 +18,7 @@ button{cursor:pointer} small{color:var(--muted)} hr{border:0;border-top:1px soli
 video{width:100%;border-radius:10px;background:#000} footer{text-align:center;color:var(--muted);padding:8px}
 @media (max-width: 900px){main{grid-template-columns:1fr}}
 </style>
+<!-- Socket.IO v4 client (compatible with Flask-SocketIO) -->
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
@@ -31,11 +32,11 @@ video{width:100%;border-radius:10px;background:#000} footer{text-align:center;co
     <div class="col">
       <h3>1) API Settings</h3>
       <div class="row">
-        <input id="apiBase" value="" style="flex:1"/>
+        <input id="apiBase" value="" style="flex:1" placeholder="https://your-domain (defaults to same-origin)"/>
         <button id="saveApi">Save</button>
         <button id="testApi">Test</button>
       </div>
-      <small>Default guesses http://[this-host]:5000</small>
+      <small>Defaults to this page’s origin (Flask static). If running frontend elsewhere, it guesses http://[this-host]:5000.</small>
       <hr/>
       <h3>2) Register / Login</h3>
       <div class="row"><input id="username" placeholder="username"/><input id="password" type="password" placeholder="password"/></div>
@@ -72,13 +73,24 @@ video{width:100%;border-radius:10px;background:#000} footer{text-align:center;co
 <footer><small>If camera/mic fail in dev, open via: <code>python -m http.server 5500</code> → http://127.0.0.1:5500</small></footer>
 
 <script>
-function guessApiBase(){
+/* ---------- API base wiring: same-origin first, fallback to :5000, URL ?api= override ---------- */
+function trimTrailingSlash(u){ return u.replace(/\/+$/,''); }
+function defaultApiBase(){
+  const qp = new URLSearchParams(location.search);
+  const override = qp.get('api');
+  if (override) return trimTrailingSlash(override);
+
+  // Prefer same-origin when the Flask server serves this file (CLIENT_DIR static)
+  if (location.origin && location.origin.startsWith('http')) {
+    return trimTrailingSlash(location.origin);
+  }
+  // Fallback for file:// or dev static server on a different port
   let host = location.hostname || '127.0.0.1';
-  if(host === 'localhost') host = '127.0.0.1';
-  const proto = location.protocol.startsWith('https') ? 'https' : 'http';
-  return `${proto}://${host}:5000`;
+  if (host === 'localhost') host = '127.0.0.1';
+  return `http://${host}:5000`;
 }
-let API_BASE = localStorage.getItem('API_BASE') || guessApiBase();
+
+let API_BASE = trimTrailingSlash(localStorage.getItem('API_BASE') || defaultApiBase());
 const $ = (id)=>document.getElementById(id);
 $('apiBase').value = API_BASE;
 
@@ -87,36 +99,54 @@ let me = null, socket = null, room = null, pc = null, localIn = null, localOut =
 
 function setWho(){ $('who').textContent = me?.username ? `${me.username} · code ${me.code}` : 'not logged in'; }
 function logChat(who, text){ const d=document.createElement('div'); d.className='msg'; d.textContent=who+': '+text; $('chat').appendChild(d); $('chat').scrollTop=$('chat').scrollHeight; }
-function warn(t){ alert(t); console.warn(t); }
+function warn(t){ alert(typeof t==='string'?t:(t?.message||'Error')); console.warn(t); }
 
 async function api(path, method='GET', body=null){
   const headers = {'Content-Type':'application/json'};
   if(token) headers['Authorization'] = 'Bearer '+token;
-  const res = await fetch(API_BASE + path, {method, headers, body: body?JSON.stringify(body):undefined});
+  const res = await fetch(API_BASE + path, {method, headers, body: body?JSON.stringify(body):undefined, credentials:'include'});
   if(!res.ok){
-    if(res.status===401 || res.status===422){ return Promise.reject('not authorized'); }
+    if(res.status===401 || res.status===422){ throw new Error('not authorized'); }
     const msg = await res.text(); throw new Error(msg || (res.status+' '+res.statusText));
   }
+  // health returns {"ok": true}, other endpoints return JSON bodies
   return res.json();
 }
 
-// settings
-$('saveApi').onclick = ()=>{ API_BASE = $('apiBase').value.trim().replace(/\/+$/,''); localStorage.setItem('API_BASE', API_BASE); alert('Saved'); };
-$('testApi').onclick = async ()=>{ try{ const j=await api('/health'); alert('Backend OK: '+JSON.stringify(j)); }catch(e){ alert('Cannot reach backend'); } };
+/* ---------- Settings ---------- */
+$('saveApi').onclick = ()=>{
+  API_BASE = trimTrailingSlash($('apiBase').value.trim());
+  localStorage.setItem('API_BASE', API_BASE);
+  alert('Saved API base: ' + API_BASE);
+  if (socket) { socket.disconnect(); socket = null; }
+  if (token) connectSocket();
+};
+$('testApi').onclick = async ()=>{
+  try{ const j=await api('/health'); alert('Backend OK: '+JSON.stringify(j)); }
+  catch(e){ alert('Cannot reach backend at '+API_BASE+'\n'+(e.message||e)); }
+};
 
-// auth
+/* ---------- Auth ---------- */
 async function afterAuth(j){
-  token = j.access_token; localStorage.setItem('ACCESS', token);
-  me = j.user || (await api('/auth/me')); $('myCode').value = me.code || ''; setWho(); connectSocket();
+  token = j.access_token;
+  localStorage.setItem('ACCESS', token);
+  me = j.user || (await api('/auth/me'));
+  $('myCode').value = me.code || '';
+  setWho();
+  connectSocket();
 }
 $('btnRegister').onclick = async ()=>{ try{ const j=await api('/auth/register','POST',{username:$('username').value,password:$('password').value}); await afterAuth(j); }catch(e){ warn(e); } };
 $('btnLogin').onclick = async ()=>{ try{ const j=await api('/auth/login','POST',{username:$('username').value,password:$('password').value}); await afterAuth(j); }catch(e){ warn(e); } };
-$('btnLogout').onclick = ()=>{ token=null; localStorage.removeItem('ACCESS'); me=null; setWho(); if(socket){ socket.disconnect(); socket=null; } $('roomPill').textContent='room: -'; $('chat').innerHTML=''; $('btnCall').disabled=true; };
+$('btnLogout').onclick = ()=>{
+  token=null; localStorage.removeItem('ACCESS'); me=null; setWho();
+  if(socket){ socket.disconnect(); socket=null; }
+  $('roomPill').textContent='room: -'; $('chat').innerHTML=''; $('btnCall').disabled=true;
+};
 
-// regen id
+/* ---------- Regenerate ID ---------- */
 $('btnRegen').onclick = async ()=>{ try{ const j=await api('/id','POST'); me.code=j.code; $('myCode').value=me.code; setWho(); }catch(e){ warn(e); } };
 
-// search + pair
+/* ---------- Search & Pair ---------- */
 $('btnSearch').onclick = async ()=>{
   const q = $('search').value.trim(); if(!q) return;
   try{
@@ -132,15 +162,22 @@ $('btnSearch').onclick = async ()=>{
   }catch(e){ warn(e); }
 };
 
-// socket
+/* ---------- Socket.IO (wired to Flask-SocketIO at same origin) ---------- */
 function connectSocket(){
   if(!token) return warn('login first');
   if(socket){ socket.disconnect(); }
-  socket = io(API_BASE, { transports: ['polling'], auth: { token } }); // polling works everywhere; WS enabled in prod
+
+  // Use same origin/path as Flask (serves at /socket.io by default)
+  socket = io(API_BASE, {
+    path: '/socket.io',
+    transports: ['polling'],      // polling works everywhere; upgrade if ALLOW_WS=1
+    auth: { token }
+  });
+
   socket.on('connect', ()=> console.log('socket connected'));
-  socket.on('whoami', ()=> console.log('authed'));
+  socket.on('whoami', ()=> console.log('socket authed'));
   socket.on('pair_request_sent', ()=> alert('Pair request sent'));
-  socket.on('pair_error', j=> warn(j.error));
+  socket.on('pair_error', j=> warn(j?.error||'pair error'));
 
   socket.on('pair_request', (j)=>{
     const ok = confirm(`Accept pair request from ${j.from.username}?`);
@@ -157,7 +194,7 @@ function connectSocket(){
   });
   socket.on('new_message', m=> logChat(m.sender_name, m.text));
 
-  // signaling
+  // WebRTC signaling
   socket.on('rtc-offer', async ({sdp})=>{
     await ensureMedia();
     if(!pc) await createPC();
@@ -170,14 +207,14 @@ function connectSocket(){
   socket.on('rtc-ice', async ({candidate})=>{ try{ if(pc && candidate) await pc.addIceCandidate(candidate); }catch(e){ console.warn(e); } });
 }
 
-// chat send
+/* ---------- Chat send ---------- */
 $('sendMsg').onclick = ()=>{
   if(!room) return warn('pair first');
   const text = $('chatInput').value.trim(); if(!text) return;
   socket.emit('send_message', {room, text}); $('chatInput').value='';
 };
 
-// WebRTC
+/* ---------- WebRTC ---------- */
 $('btnCall').onclick = async ()=>{ if(!room) return warn('pair first'); await startCall(); };
 $('btnHang').onclick = async ()=>{ await endCall(); };
 
@@ -190,8 +227,6 @@ async function createPC(){
   pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
   pc.onicecandidate = e=>{ if(e.candidate) socket.emit('rtc-ice', {room, candidate:e.candidate}); };
   pc.ontrack = e=>{ $('peer').srcObject = e.streams[0]; };
-
-  // use one outbound stream to keep things simple
   localOut = new MediaStream();
   localIn.getTracks().forEach(t=> localOut.addTrack(t));
   localOut.getTracks().forEach(t=> pc.addTrack(t, localOut));
@@ -209,7 +244,7 @@ async function endCall(){
   $('me').srcObject=null; $('peer').srcObject=null;
 }
 
-// bootstrap
+/* ---------- Bootstrap ---------- */
 (async function boot(){
   try{
     const meResp = await api('/auth/me', 'GET');
