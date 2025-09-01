@@ -69,7 +69,7 @@ video{width:100%;border-radius:10px;background:#000} footer{text-align:center;co
   </section>
 </main>
 
-<footer><small>Tip: on phones, camera/mic usually require HTTPS (localhost is exempt).</small></footer>
+<footer><small>Calls need HTTPS on most phones. Render is HTTPS, so you’re good.</small></footer>
 
 <script>
 /* ---------- API base ---------- */
@@ -169,63 +169,94 @@ async function checkPendingPairRequests() {
   } catch (_) {}
 }
 
-/* ---------- Socket.IO (prefer WebSocket, fallback to polling automatically) ---------- */
-function connectSocket(){
-  if(!token) return warn('login first');
-  if(socket){ socket.disconnect(); }
-
-  // NOTE: we don't force 'transports' — client will try websocket then fall back to polling
-  socket = io(API_BASE, {
-    path: '/socket.io',
-    auth: { token },
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 300,
-    reconnectionDelayMax: 2000,
-    timeout: 10000
-  });
-
-  socket.on('connect', ()=>{
-    console.log('socket connected', socket.id);
+/* ---------- Socket.IO: WebSocket-first to avoid 502s on proxies ---------- */
+function wireSocketHandlers(s){
+  s.on('connect', ()=>{
+    console.log('socket connected', s.id);
     checkPendingPairRequests();
   });
-  socket.on('disconnect', (reason)=> console.log('socket disconnected:', reason));
-  socket.on('connect_error', (err)=> console.warn('socket connect_error:', err?.message||err));
+  s.on('disconnect', (reason)=> console.log('socket disconnected:', reason));
+  s.on('connect_error', (err)=> console.warn('socket connect_error:', err?.message||err));
 
-  socket.on('whoami', ()=> console.log('socket authed'));
-  socket.on('pair_request_sent', ()=> alert('Pair request sent'));
-  socket.on('pair_error', j=> warn(j?.error||'pair error'));
+  s.on('whoami', ()=> console.log('socket authed'));
+  s.on('pair_request_sent', ()=> alert('Pair request sent'));
+  s.on('pair_error', j=> warn(j?.error||'pair error'));
 
-  socket.on('pair_request', (j)=>{
+  s.on('pair_request', (j)=>{
     if (seenRequests.has(j.request_id)) return;
     seenRequests.add(j.request_id);
     const ok = confirm(`Accept pair request from ${j.from.username}?`);
-    socket.emit('pair_response', {request_id: j.request_id, accept: ok});
+    s.emit('pair_response', {request_id: j.request_id, accept: ok});
   });
-  socket.on('pair_declined', ()=> alert('Pair request declined'));
-  socket.on('paired', async (j)=>{
+  s.on('pair_declined', ()=> alert('Pair request declined'));
+  s.on('paired', async (j)=>{
     room = j.room; $('roomPill').textContent='room: '+room; $('btnCall').disabled=false;
-    socket.emit('join_room', {room});
+    s.emit('join_room', {room});
     try{
       const msgs = await api('/messages/'+room, 'GET');
       $('chat').innerHTML=''; msgs.reverse().forEach(m=>logChat(m.sender_name, m.text));
     }catch(_){}
   });
-  socket.on('new_message', m=> logChat(m.sender_name, m.text));
+  s.on('new_message', m=> logChat(m.sender_name, m.text));
 
   // WebRTC signaling
-  socket.on('rtc-offer', async ({sdp})=>{
+  s.on('rtc-offer', async ({sdp})=>{
     await ensureMedia();
     if(!pc) await createPC();
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     const ans = await pc.createAnswer();
     await pc.setLocalDescription(ans);
-    socket.emit('rtc-answer', {room, sdp: pc.localDescription});
+    s.emit('rtc-answer', {room, sdp: pc.localDescription});
   });
-  socket.on('rtc-answer', async ({sdp})=>{ if(pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp)); });
-  socket.on('rtc-ice', async ({candidate})=>{ try{ if(pc && candidate) await pc.addIceCandidate(candidate); }catch(e){ console.warn(e); } });
+  s.on('rtc-answer', async ({sdp})=>{ if(pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp)); });
+  s.on('rtc-ice', async ({candidate})=>{ try{ if(pc && candidate) await pc.addIceCandidate(candidate); }catch(e){ console.warn(e); } });
+}
 
-  window.addEventListener('beforeunload', ()=>{ try{ socket.close(); }catch{} });
+function connectSocket(){
+  if(!token) return warn('login first');
+  if(socket){ try{ socket.disconnect(); }catch{} socket=null; }
+
+  const baseOpts = {
+    path: '/socket.io',
+    auth: { token },
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 300,
+    reconnectionDelayMax: 1500,
+    timeout: 8000
+  };
+
+  // Prefer pure WebSocket on HTTPS (Render) to avoid 502s from long-polling
+  const preferWS = true; // always try WS first
+
+  function connectWSFirst(){
+    return new Promise((resolve, reject)=>{
+      const s = io(API_BASE, { ...baseOpts, transports: ['websocket'] }); // WS only
+      const timer = setTimeout(()=>{
+        try{ s.disconnect(); }catch{}
+        reject(new Error('ws-timeout'));
+      }, 3000);
+      s.on('connect', ()=>{ clearTimeout(timer); socket = s; wireSocketHandlers(socket); resolve(); });
+      s.on('connect_error', (err)=>{ clearTimeout(timer); try{ s.disconnect(); }catch{}; reject(err); });
+    });
+  }
+
+  function connectWithPolling(){
+    const s = io(API_BASE, { ...baseOpts, transports: ['polling'] }); // explicit polling fallback
+    socket = s;
+    wireSocketHandlers(socket);
+  }
+
+  if (preferWS) {
+    connectWSFirst().catch(()=>{
+      console.warn('WS failed quickly; falling back to polling.');
+      connectWithPolling();
+    });
+  } else {
+    connectWithPolling();
+  }
+
+  window.addEventListener('beforeunload', ()=>{ try{ socket && socket.close(); }catch{} });
 }
 
 /* ---------- Chat ---------- */
@@ -241,7 +272,6 @@ $('btnHang').onclick = async ()=>{ await endCall(); };
 
 async function ensureMedia(){
   if(localIn) return;
-  // NOTE: Most mobile browsers require HTTPS for camera/mic (localhost is exempt)
   localIn = await navigator.mediaDevices.getUserMedia({audio:true, video:true});
   $('me').srcObject = localIn;
 }

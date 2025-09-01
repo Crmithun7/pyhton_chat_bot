@@ -1,4 +1,4 @@
-# -------------------- eventlet FIRST (if allowed) --------------------
+# -------------------- eventlet FIRST (must be before any other imports) --------------------
 import os
 USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"  # set USE_EVENTLET=0 to force threading
 
@@ -6,11 +6,11 @@ ASYNC_MODE = "threading"
 if USE_EVENTLET:
     try:
         import eventlet  # type: ignore
-        eventlet.monkey_patch()  # MUST be before any other imports (Flask/SocketIO/etc.)
+        eventlet.monkey_patch()
         ASYNC_MODE = "eventlet"
         print(">>> Using eventlet async mode (WebSocket upgrades enabled).")
     except Exception as e:
-        print(">>> Eventlet unavailable or failed to monkey_patch; falling back to threading. Reason:", repr(e))
+        print(">>> Eventlet unavailable; falling back to threading:", repr(e))
         ASYNC_MODE = "threading"
 
 # -------------------- rest of imports (safe after monkey_patch) --------------------
@@ -47,6 +47,7 @@ class Config:
     SQLALCHEMY_DATABASE_URI = DB_PATH
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {"connect_args": {"check_same_thread": False}}
+    # allow your Render origin; "*" is OK for this demo
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
 
 app = Flask(__name__, static_folder=CLIENT_DIR, static_url_path="")
@@ -59,10 +60,10 @@ jwt = JWTManager(app)
 sio = SocketIO(
     app,
     async_mode=ASYNC_MODE,
-    cors_allowed_origins=Config.CORS_ORIGINS,
+    cors_allowed_origins=Config.CORS_ORIGINS,  # accepts "*" from above
+    allow_upgrades=True,                       # enable WebSocket upgrades
     logger=False,
     engineio_logger=False,
-    allow_upgrades=True,   # allow WS when available
     ping_interval=20,
     ping_timeout=40,
 )
@@ -107,7 +108,7 @@ def room_for(a: int, b: int) -> str:
     x, y = sorted([a, b])
     return "pair-" + hashlib.sha256(f"{x}:{y}".encode()).hexdigest()[:32]
 
-USER_SIDS = {}   # uid -> current sid (best-effort)
+USER_SIDS = {}   # uid -> current sid
 SID_USERS = {}   # sid -> uid
 
 def _decode_access_token(token: str):
@@ -291,10 +292,7 @@ def sio_pair_with_code(data):
     pr = PairRequest(from_id=me, to_id=peer.id, status="pending")
     db.session.add(pr); db.session.commit()
 
-    payload = {
-        "request_id": pr.id,
-        "from": {"id": me, "username": db.session.get(User, me).username}
-    }
+    payload = {"request_id": pr.id, "from": {"id": me, "username": db.session.get(User, me).username}}
     emit("pair_request", payload, room=f"user-{peer.id}")
     peer_sid = USER_SIDS.get(peer.id)
     if peer_sid:
